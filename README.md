@@ -4,7 +4,7 @@
 
 ## 技术栈
 
-- Java 17、Spring Boot 3.5.6、Spring AI 1.1.0
+- Java 21、Spring Boot 3.5.6、Spring AI 1.1.0
 - MySQL 8、MyBatis-Plus 3.5.5
 - PostgreSQL + pgvector、MinIO
 - Apache PDFBox 2.0.30、Apache POI 5.2.5、Python `python-pptx` 1.0.2
