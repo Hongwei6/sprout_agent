@@ -71,10 +71,10 @@ function addMessage(conversation, role, text) {
   bubble.scrollIntoView({ block: 'nearest' });
 }
 
-form.addEventListener('submit', (event) => {
+form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = promptInput.value.trim();
-  if (!text) return;
+  if (!text || sendButton.disabled) return;
 
   let conversation = conversations.find((item) => item.id === activeId);
   if (!conversation) {
@@ -84,12 +84,25 @@ form.addEventListener('submit', (event) => {
   }
   welcome.hidden = true;
   addMessage(conversation, 'user', text);
-  addMessage(conversation, 'notice', '萌芽的模型服务尚未接入。这条消息已保存在当前浏览器中；配置 AI 服务后即可开始对话。');
   promptInput.value = '';
   promptInput.style.height = 'auto';
   sendButton.disabled = true;
   saveConversations();
   renderHistory();
+
+  try {
+    const response = await fetch('/api/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message: text })
+    });
+    const result = await response.json();
+    addMessage(conversation, response.ok ? 'assistant' : 'notice', result.answer || '萌芽暂时无法回复，请稍后重试。');
+  } catch {
+    addMessage(conversation, 'notice', '无法连接萌芽服务，请确认后端已启动后重试。');
+  }
+  saveConversations();
+  sendButton.disabled = promptInput.value.trim().length === 0;
 });
 
 promptInput.addEventListener('input', () => {

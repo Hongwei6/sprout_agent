@@ -1,0 +1,36 @@
+server:
+  port: ${SERVER_PORT:8080}
+
+spring:
+  application:
+    name: sprout-agent
+  datasource:
+    url: ${MYSQL_URL:jdbc:mysql://localhost:3306/sprout_agent?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai}
+    username: ${MYSQL_USER:sprout}
+    password: ${MYSQL_PASSWORD:sprout-local}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  ai:
+    openai:
+      base-url: ${DOUBAO_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
+      # Placeholder permits local startup; the API rejects requests until DOUBAO_API_KEY is set.
+      api-key: ${DOUBAO_API_KEY:local-placeholder}
+      chat:
+        options:
+          model: ${DOUBAO_MODEL:ep-your-endpoint-id}
+
+mybatis-plus:
+  configuration:
+    map-underscore-to-camel-case: true
+
+sprout:
+  pgvector:
+    url: ${PGVECTOR_URL:jdbc:postgresql://localhost:5432/sprout_agent}
+    username: ${PGVECTOR_USER:sprout}
+    password: ${PGVECTOR_PASSWORD:sprout-local}
+    dimensions: ${PGVECTOR_DIMENSIONS:1536}
+    initialize-schema: true
+  minio:
+    endpoint: ${MINIO_ENDPOINT:http://localhost:9000}
+    access-key: ${MINIO_ACCESS_KEY:sprout}
+    secret-key: ${MINIO_SECRET_KEY:sprout-local-secret}
+    bucket: ${MINIO_BUCKET:sprout-files}
