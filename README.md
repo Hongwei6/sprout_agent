@@ -6,6 +6,7 @@
 
 - Java 21、Spring Boot 3.5.6、Spring AI 1.1.0
 - MySQL 8、MyBatis-Plus 3.5.5
+- MySQL 是应用主数据库（对话与业务表）；PostgreSQL 仅用于 pgvector。
 - PostgreSQL + pgvector、MinIO
 - Apache PDFBox 2.0.30、Apache POI 5.2.5、Python `python-pptx` 1.0.2
 - Reactor 3.7.11
