@@ -34,6 +34,6 @@
 
 ## 其他
 
-本地 MySQL 和 pgvector 可用 `docker compose up -d mysql pgvector` 启动；MinIO 本地容器可选：`docker compose --profile minio up -d minio`。
+应用默认连接上述 ZeroTier 地址。若使用本地 Docker 服务，需显式设置 `MYSQL_URL`、`PGVECTOR_URL`、`MINIO_ENDPOINT` 及对应本地账号密码后再运行。
 
 `python-pptx` 是 Python 文档处理依赖，通过 `python3 -m pip install -r requirements.txt` 安装；其余依赖由 Maven 管理。pgvector 维度由 `PGVECTOR_DIMENSIONS` 配置，必须与 embedding 模型的维度一致。
