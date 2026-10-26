@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f8fc" />
+    <meta name="description" content="萌芽 — 一个轻盈、友好的 AI 助手。" />
+    <title>萌芽 · AI 助手</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script src="app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="sidebar" aria-label="会话导航">
+        <a class="brand" href="#" aria-label="萌芽首页">
+          <span class="brand-mark" aria-hidden="true">芽</span>
+          <span class="brand-name">萌芽</span>
+        </a>
+        <button class="new-chat" id="new-chat" type="button"><span aria-hidden="true">＋</span> 开启新对话</button>
+        <div class="sidebar-label">最近</div>
+        <nav class="conversation-list" id="conversation-list" aria-label="最近对话"></nav>
+        <div class="sidebar-bottom">
+          <div class="profile-avatar" aria-hidden="true">萌</div>
+          <div class="profile-copy"><strong>访客</strong><span>萌芽 AI 助手</span></div>
+          <span class="profile-menu" aria-hidden="true">···</span>
+        </div>
+      </aside>
+
+      <main class="main-panel">
+        <header class="topbar">
+          <button class="mobile-brand" id="mobile-new-chat" type="button" aria-label="开启新对话"><span class="brand-mark">芽</span><span>萌芽</span></button>
+          <div class="model-label"><span class="status-dot"></span> 萌芽助手 <span class="model-tag">预览版</span></div>
+          <button class="icon-button" id="clear-chat" type="button" aria-label="清空当前对话" title="清空当前对话">⌫</button>
+        </header>
+
+        <section class="chat-area" id="chat-area" aria-live="polite">
+          <div class="welcome" id="welcome">
+            <div class="welcome-sprout" aria-hidden="true"><span>✳</span></div>
+            <p class="eyebrow">你好，我是萌芽</p>
+            <h1>有什么新点子，<span>一起发芽吧。</span></h1>
+            <p class="welcome-copy">可以问我问题、整理灵感，或从一个小想法开始。</p>
+            <div class="suggestions" aria-label="试试这样提问">
+              <button class="suggestion" type="button" data-prompt="帮我规划一个轻松的周末">☀️ <span>帮我规划一个轻松的周末</span><b>↗</b></button>
+              <button class="suggestion" type="button" data-prompt="把这个想法整理成清晰的计划">🌱 <span>把想法整理成清晰的计划</span><b>↗</b></button>
+              <button class="suggestion" type="button" data-prompt="给我推荐几本值得读的书">📚 <span>推荐几本值得读的书</span><b>↗</b></button>
+              <button class="suggestion" type="button" data-prompt="解释一个我一直没弄懂的概念">✨ <span>解释一个没弄懂的概念</span><b>↗</b></button>
+            </div>
+          </div>
+          <div class="messages" id="messages"></div>
+        </section>
+
+        <footer class="composer-wrap">
+          <form class="composer" id="chat-form">
+            <label class="sr-only" for="prompt">发送消息给萌芽</label>
+            <textarea id="prompt" rows="1" placeholder="给萌芽发消息…" maxlength="4000"></textarea>
+            <div class="composer-bottom">
+              <span class="composer-hint">萌芽还在成长中，回答可能不够准确。</span>
+              <button class="send-button" id="send-button" type="submit" aria-label="发送消息" disabled><span>↑</span></button>
+            </div>
+          </form>
+          <p class="footer-note">AI 生成内容仅供参考，请自行判断。</p>
+        </footer>
+      </main>
+    </div>
+  </body>
+</html>
