@@ -11,12 +11,17 @@ spring:
     driver-class-name: com.mysql.cj.jdbc.Driver
   ai:
     openai:
-      base-url: ${DOUBAO_BASE_URL:https://ark.cn-beijing.volces.com/api/v3}
-      # Placeholder permits local startup; the API rejects requests until DOUBAO_API_KEY is set.
-      api-key: ${DOUBAO_API_KEY:local-placeholder}
+      base-url: ${SPRING_AI_OPENAI_BASE_URL:https://api.deepseek.com}
+      api-key: ${SPRING_AI_OPENAI_API_KEY:local-placeholder}
       chat:
         options:
-          model: ${DOUBAO_MODEL:ep-your-endpoint-id}
+          model: ${SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL:deepseek-chat}
+      embedding:
+        base-url: ${SPRING_AI_OPENAI_EMBEDDING_BASE_URL:http://10.244.0.110:11434}
+        api-key: ${SPRING_AI_OPENAI_EMBEDDING_API_KEY:ollama}
+        options:
+          model: ${SPRING_AI_OPENAI_EMBEDDING_OPTIONS_MODEL:qwen3-embedding:4b}
+          dimensions: ${SPRING_AI_OPENAI_EMBEDDING_OPTIONS_DIMENSIONS:1024}
 
 mybatis-plus:
   configuration:
@@ -34,3 +39,6 @@ sprout:
     access-key: ${MINIO_ACCESS_KEY:sprout}
     secret-key: ${MINIO_SECRET_KEY:sprout-local-secret}
     bucket: ${MINIO_BUCKET:sprout-files}
+  vision:
+    base-url: ${SPROUT_VISION_BASE_URL:http://10.244.0.110:11434}
+    model: ${SPROUT_VISION_MODEL:qwen3-vl:8b}

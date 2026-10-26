@@ -25,8 +25,8 @@ public class ChatController {
 
     public ChatController(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
-            @Value("${DOUBAO_API_KEY:}") String apiKey,
-            @Value("${DOUBAO_MODEL:}") String model) {
+            @Value("${spring.ai.openai.api-key:}") String apiKey,
+            @Value("${spring.ai.openai.chat.options.model:}") String model) {
         this.chatClientBuilder = chatClientBuilder;
         this.apiKey = apiKey;
         this.model = model;
@@ -37,7 +37,7 @@ public class ChatController {
         ChatClient.Builder builder = chatClientBuilder.getIfAvailable();
         if (apiKey.isBlank() || LOCAL_API_KEY_PLACEHOLDER.equals(apiKey) || model.isBlank() || builder == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(new ChatResponse("AI 服务尚未配置，请设置 DOUBAO_API_KEY 和 DOUBAO_MODEL。"));
+                    .body(new ChatResponse("DeepSeek 服务尚未配置，请检查 SPRING_AI_OPENAI_API_KEY 和 SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL。"));
         }
 
         String answer = builder
