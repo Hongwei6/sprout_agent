@@ -9,6 +9,10 @@ spring:
     username: ${MYSQL_USER}
     password: ${MYSQL_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
+  sql:
+    init:
+      mode: always
+      schema-locations: classpath:schema-mysql.sql
   ai:
     openai:
       base-url: ${SPRING_AI_OPENAI_BASE_URL:https://api.deepseek.com}

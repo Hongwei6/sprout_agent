@@ -20,6 +20,17 @@
 
 打开 <http://localhost:8080>。聊天 API 为 `POST /api/chat`，请求体 `{"message":"你好"}`。
 
+每条对话和消息保存在 MySQL；页面刷新后可从历史列表继续查看。首次发送时创建对话，后续请求携带 `conversationId`；“清空对话”会删除当前对话及其消息。
+
+- `GET /api/conversations`：最近 50 条对话
+- `GET /api/conversations/{id}`：对话及消息
+- `DELETE /api/conversations/{id}`：删除对话
+- `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID
+
+启动时，`schema-mysql.sql` 会在 MySQL 中幂等创建对话表。
+
+当前还没有用户登录和对话隔离：可访问此应用的访客都能查看或删除历史对话。仅限可信内网使用；公开部署前需加入身份认证与按用户授权。
+
 ## ZeroTier 服务
 
 配置来源：`/Users/hongwei/dev/workspace/serve` 中的服务器文档及项目根目录 `.env`。
