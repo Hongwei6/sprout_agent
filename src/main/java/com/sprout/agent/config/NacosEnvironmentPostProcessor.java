@@ -10,6 +10,10 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.List;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.context.config.ConfigDataEnvironmentPostProcessor;
@@ -18,6 +22,7 @@ import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.core.Ordered;
 import org.springframework.core.env.ConfigurableEnvironment;
 import org.springframework.core.env.PropertySource;
+import org.springframework.core.env.MapPropertySource;
 import org.springframework.core.io.ByteArrayResource;
 
 public class NacosEnvironmentPostProcessor implements EnvironmentPostProcessor, Ordered {
@@ -32,6 +37,7 @@ public class NacosEnvironmentPostProcessor implements EnvironmentPostProcessor, 
 
     @Override
     public void postProcessEnvironment(ConfigurableEnvironment environment, SpringApplication application) {
+        loadLocalEnvFile(environment);
         String address = environment.getProperty("NACOS_SERVER_ADDR", "10.244.0.111:8848");
         String username = required(environment, "NACOS_USERNAME");
         String password = required(environment, "NACOS_PASSWORD");
@@ -54,6 +60,36 @@ public class NacosEnvironmentPostProcessor implements EnvironmentPostProcessor, 
         } catch (InterruptedException exception) {
             Thread.currentThread().interrupt();
             throw new IllegalStateException("Interrupted while loading Nacos configuration " + dataId, exception);
+        }
+    }
+
+    private static void loadLocalEnvFile(ConfigurableEnvironment environment) {
+        Path path = Path.of(environment.getProperty("SPROUT_ENV_FILE", ".env"));
+        if (!Files.isRegularFile(path)) return;
+
+        Map<String, Object> values = new LinkedHashMap<>();
+        try {
+            for (String line : Files.readAllLines(path, StandardCharsets.UTF_8)) {
+                String trimmed = line.trim();
+                if (trimmed.isEmpty() || trimmed.startsWith("#")) continue;
+                int separator = trimmed.indexOf('=');
+                if (separator <= 0) continue;
+                String key = trimmed.substring(0, separator).trim();
+                String value = trimmed.substring(separator + 1).trim();
+                if (key.matches("[A-Za-z_][A-Za-z0-9_]*")) {
+                    if (value.length() >= 2
+                            && ((value.startsWith("\"") && value.endsWith("\""))
+                                    || (value.startsWith("'") && value.endsWith("'")))) {
+                        value = value.substring(1, value.length() - 1);
+                    }
+                    values.put(key, value);
+                }
+            }
+        } catch (IOException exception) {
+            throw new IllegalStateException("Unable to read local environment file " + path, exception);
+        }
+        if (!values.isEmpty()) {
+            environment.getPropertySources().addLast(new MapPropertySource("localDotEnv", values));
         }
     }
 

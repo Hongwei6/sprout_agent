@@ -13,7 +13,7 @@
 
 ## 运行
 
-项目根目录 `.env` 保存本机凭证（包括 DeepSeek API Key 和 Nacos 登录凭证），该文件已被 `.gitignore` 排除。启动脚本加载 `.env`，应用从 Nacos 获取其余运行配置：
+项目根目录 `.env` 保存本机凭证（包括 DeepSeek API Key 和 Nacos 登录凭证），该文件已被 `.gitignore` 排除。应用启动时读取 `.env`，因此可通过 `./run.sh` 或 IDE 启动；Nacos 提供其余运行配置：
 
 ```sh
 ./run.sh
