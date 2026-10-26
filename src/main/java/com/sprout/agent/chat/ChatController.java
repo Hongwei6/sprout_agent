@@ -16,21 +16,26 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/api/chat")
 public class ChatController {
+    private static final String LOCAL_API_KEY_PLACEHOLDER = "local-placeholder";
+
 
     private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
     private final String apiKey;
+    private final String model;
 
     public ChatController(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
-            @Value("${DOUBAO_API_KEY:}") String apiKey) {
+            @Value("${DOUBAO_API_KEY:}") String apiKey,
+            @Value("${DOUBAO_MODEL:}") String model) {
         this.chatClientBuilder = chatClientBuilder;
         this.apiKey = apiKey;
+        this.model = model;
     }
 
     @PostMapping
     public ResponseEntity<ChatResponse> chat(@Valid @RequestBody ChatRequest request) {
         ChatClient.Builder builder = chatClientBuilder.getIfAvailable();
-        if (apiKey.isBlank() || builder == null) {
+        if (apiKey.isBlank() || LOCAL_API_KEY_PLACEHOLDER.equals(apiKey) || model.isBlank() || builder == null) {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
                     .body(new ChatResponse("AI 服务尚未配置，请设置 DOUBAO_API_KEY 和 DOUBAO_MODEL。"));
         }
