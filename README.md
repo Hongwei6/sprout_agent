@@ -12,11 +12,14 @@
 
 ## 运行
 
-项目根目录下的 `.env` 保存 ZeroTier 服务凭证，并被 `.gitignore` 排除。启动脚本自动加载该文件并启用 `zerotier` Profile：
+项目根目录 `.env` 保存本机凭证（包括 DeepSeek API Key 和 Nacos 登录凭证），该文件已被 `.gitignore` 排除。启动脚本加载 `.env`，应用从 Nacos 获取其余运行配置：
 
 ```sh
 ./run.sh
 ```
+
+Nacos 地址为 `10.244.0.111:8848`，配置 Data ID `sprout-agent-zerotier.yaml`、Group `DEFAULT_GROUP`。DeepSeek API Key 通过 `${SPRING_AI_OPENAI_API_KEY}` 从本机环境读取，不存入 Nacos。
+配置在应用启动时从 Nacos 读取；修改后重启应用生效。应用使用 Nacos HTTP 配置 API，以兼容当前的 Nacos Server 2.1.0。
 
 打开 <http://localhost:8080>。聊天 API 为 `POST /api/chat`，请求体 `{"message":"你好"}`。
 
