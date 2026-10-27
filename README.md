@@ -21,7 +21,7 @@
 
 Nacos 地址为 `10.244.0.111:8848`，命名空间 `sprout_agent`，配置 Data ID `sprout-agent-zerotier.yaml`、Group `DEFAULT_GROUP`。DeepSeek API Key 通过 `${SPRING_AI_OPENAI_API_KEY}` 从本机环境读取，不存入 Nacos。
 `application.yml` 使用 Spring Cloud Alibaba Nacos Config 导入 `sprout_agent` 命名空间的 YAML；无需自定义配置加载器。修改 Nacos 配置后重启应用生效。
-Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-zerotier.yaml`，字段为 `sprout.tavily.api-key`。聊天时模型可按需调用联网搜索工具；结果包含标题、链接和摘要。修改该配置后重启应用生效。Nacos 中的 API Key 同样是敏感凭证，应限制配置读取权限，不要将配置导出到公开仓库。
+Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-zerotier.yaml`，字段为 `sprout.tavily.api-key`。应用启动时通过 <https://mcp.tavily.com/mcp/> 建立 Streamable HTTP MCP 会话，注册服务端工具供 DeepSeek 按需调用，不再直连 Tavily REST API。修改配置后重启应用生效。Nacos 中的 API Key 同样是敏感凭证，应限制配置读取权限，不要将配置导出到公开仓库。
 
 服务启动后通过 Nacos Discovery 注册为 `sprout-agent`，在 Nacos 服务中心切换到 `sprout_agent` 命名空间查看。优先注册本机 `10.244.*` ZeroTier 地址；停止服务后实例会自动注销。
 
@@ -32,9 +32,9 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 - `GET /api/conversations`：最近 50 条对话
 - `GET /api/conversations/{id}`：对话及消息
 - `DELETE /api/conversations/{id}`：删除对话
-- `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 事件依次包含 `conversation`（ID）、`delta`（增量文本）、`done`（完成）；异常发送 `error`。客户端应按事件逐段拼接文本。
+- `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 事件包含 `conversation`（ID）、`delta`（增量文本）、`thinking`（正在调用 MCP 工具的临时状态）和 `done`（完成）；异常发送 `error`。客户端只按 `delta` 拼接答案，`thinking` 不写入聊天记录。
 
-聊天使用流式 ReAct 轮次：识别工具调用、合并同一调用的参数分片、执行 Tavily 并将工具结果（包括失败信息）反馈给下一轮。无工具调用即结束；超过 `sprout.agent.max-rounds` 后不再提供工具，强制生成最终回答。默认最多 5 轮；设置为 0 表示不限制轮次。`sprout.agent.max-messages` 控制每次注入模型的历史消息数，必须为至少 2 的偶数；Nacos YAML 配置为 20（至多最近 10 轮完整问答），只限制推理窗口，不删除 MySQL 的完整历史。
+聊天使用流式 ReAct 轮次：识别工具调用、合并同一调用的参数分片、并发执行 Tavily MCP 工具，并将工具结果（包括失败信息）回填当前上下文供下一轮推理；开始执行时推送 `thinking` 状态。无工具调用即结束；超过 `sprout.agent.max-rounds` 后不再提供工具，强制生成最终回答。默认最多 5 轮；设置为 0 表示不限制轮次。`sprout.agent.max-messages` 控制每次注入模型的历史消息数，必须为至少 2 的偶数；Nacos YAML 配置为 20（至多最近 10 轮完整问答），只限制推理窗口，不删除 MySQL 的完整历史。
 
 启动时，`schema-mysql.sql` 在 MySQL 中幂等创建对话表和 `chat_turn_details` 回合明细表。回合明细以助手消息 ID 关联，保存模型实际返回的思考片段（未返回时为 `NULL`）、工具调用与结果 JSON、Tavily 来源链接 JSON，以及首次响应和总耗时（毫秒）；删除对话时由外键级联清理。思考内容、工具过程和来源不进入会话记忆。
 
@@ -42,7 +42,7 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 
 ## 代码结构
 
-`controller` 只处理 HTTP/SSE 和请求校验；`service` 负责 ReAct 轮次与会话事务；`entity` 映射 MySQL 表，`mapper` 承担数据访问；`tool` 封装 Tavily，`config` 管理 MySQL、pgvector 和 MinIO。各层位于 `src/main/java/com/sprout/agent/`，API 路径和表名保持不变。
+`controller` 只处理 HTTP/SSE 和请求校验；`service` 负责 ReAct 轮次与会话事务；`entity` 映射 MySQL 表，`mapper` 承担数据访问；`config` 管理 MySQL、pgvector、MinIO 和 Tavily MCP 客户端。各层位于 `src/main/java/com/sprout/agent/`，API 路径和表名保持不变。
 
 ## ZeroTier 服务
 

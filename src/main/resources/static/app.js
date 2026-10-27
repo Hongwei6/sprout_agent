@@ -83,6 +83,7 @@ form.addEventListener('submit', async (event) => {
   promptInput.style.height = 'auto';
   sendButton.disabled = true;
 
+  let searchStatus = null;
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
@@ -107,18 +108,30 @@ form.addEventListener('submit', async (event) => {
         const data = frame.split('\n').filter(line => line.startsWith('data:'))
           .map(line => line.slice(5)).join('\n');
         if (name === 'conversation' && token === viewToken) activeId = data;
+        if (name === 'thinking' && token === viewToken) {
+          if (!searchStatus) searchStatus = addMessage('notice', data);
+          else searchStatus.textContent = data;
+        }
         if (name === 'delta' && bubble) {
+          if (searchStatus) {
+            searchStatus.remove();
+            searchStatus = null;
+          }
           bubble.textContent += data;
           bubble.scrollIntoView({ block: 'nearest' });
         }
         if (name === 'error') throw new Error(data);
-        if (name === 'done') completed = true;
+        if (name === 'done') {
+          if (searchStatus) searchStatus.remove();
+          completed = true;
+        }
       }
       if (done) break;
     }
     if (!completed) throw new Error('对话流提前中断');
     if (token === viewToken) refreshHistory().catch(() => {});
   } catch (error) {
+    if (searchStatus) searchStatus.remove();
     if (token === viewToken) addMessage('notice', error.message || '无法连接萌芽服务，请稍后重试。');
   } finally {
     isSending = false;

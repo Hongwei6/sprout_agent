@@ -2,11 +2,12 @@ package com.sprout.agent.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import com.sprout.agent.tool.TavilySearchTool;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReferenceArray;
+import java.util.regex.Pattern;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -14,19 +15,21 @@ import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
-import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
 @Service
 public class ReactAgentService {
 
     private static final String LOCAL_API_KEY_PLACEHOLDER = "local-placeholder";
+    private static final Pattern SOURCE_URL = Pattern.compile("https?://[^\\s\"\\\\<>]+");
 
     private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
     private final ConversationService conversationService;
@@ -41,7 +44,7 @@ public class ReactAgentService {
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
             ConversationService conversationService,
             ObjectMapper objectMapper,
-            TavilySearchTool tavilySearchTool,
+            SyncMcpToolCallbackProvider toolProvider,
             @Value("${spring.ai.openai.api-key:}") String apiKey,
             @Value("${spring.ai.openai.chat.options.model:}") String model,
             @Value("${sprout.agent.max-rounds:5}") int maxRounds,
@@ -49,7 +52,7 @@ public class ReactAgentService {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
         this.objectMapper = objectMapper;
-        this.tools = MethodToolCallbackProvider.builder().toolObjects(tavilySearchTool).build().getToolCallbacks();
+        this.tools = toolProvider.getToolCallbacks();
         this.apiKey = apiKey;
         this.model = model;
         this.maxRounds = maxRounds;
@@ -133,38 +136,59 @@ public class ReactAgentService {
             return forceFinalStream(client, messages, conversationId, question, turn);
         }
         messages.add(AssistantMessage.builder().content(state.text.toString()).toolCalls(state.toolCalls).build());
-        List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>(state.toolCalls.size());
-        for (AssistantMessage.ToolCall call : state.toolCalls) {
-            ToolCallback callback = null;
-            for (ToolCallback tool : tools) {
-                if (tool.getToolDefinition().name().equals(call.name())) {
-                    callback = tool;
-                    break;
-                }
-            }
-            String result;
-            if (callback == null) {
-                result = "工具未找到：" + call.name();
-            } else {
-                try {
-                    result = callback.call(call.arguments());
-                    if ("searchWeb".equals(call.name())) {
-                        turn.references.addAll(extractSourceLinks(result, objectMapper));
+        AtomicReferenceArray<ToolOutcome> outcomes = new AtomicReferenceArray<>(state.toolCalls.size());
+        return Flux.range(0, state.toolCalls.size())
+                .flatMap(i -> {
+                    AssistantMessage.ToolCall call = state.toolCalls.get(i);
+                    return Flux.concat(Mono.just(event("thinking", toolStatus(call))),
+                            Mono.fromRunnable(() -> outcomes.set(i, executeToolCall(call)))
+                                    .subscribeOn(Schedulers.boundedElastic()).then(Mono.<ChatEvent>empty()));
+                })
+                .concatWith(Flux.defer(() -> {
+                    List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>(state.toolCalls.size());
+                    for (int i = 0; i < state.toolCalls.size(); i++) {
+                        AssistantMessage.ToolCall call = state.toolCalls.get(i);
+                        ToolOutcome outcome = outcomes.get(i);
+                        turn.tools.add(new ToolExecution(call.name(), Objects.toString(call.arguments(), ""), outcome.result()));
+                        turn.references.addAll(outcome.references());
+                        responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), outcome.result()));
                     }
+                    messages.add(ToolResponseMessage.builder().responses(responses).build());
+                    return scheduleRound(client, messages, conversationId, question, turn, round + 1);
+                }));
+    }
+
+    private String toolStatus(AssistantMessage.ToolCall call) {
+        if (!call.name().contains("tavily_search")) return "正在调用工具：" + call.name();
+        try {
+            String query = objectMapper.readTree(call.arguments()).path("query").asText("");
+            return "正在搜索信息：" + query.substring(0, Math.min(query.length(), 120));
+        } catch (Exception ex) {
+            return "正在搜索信息";
+        }
+    }
+
+    private ToolOutcome executeToolCall(AssistantMessage.ToolCall call) {
+        for (ToolCallback tool : tools) {
+            if (tool.getToolDefinition().name().equals(call.name())) {
+                try {
+                    String result = tool.call(call.arguments());
+                    return new ToolOutcome(result, call.name().contains("tavily")
+                            ? extractSourceLinks(result, objectMapper) : List.of());
                 } catch (Exception ex) {
-                    result = "工具执行失败：" + ex.getClass().getSimpleName();
+                    return new ToolOutcome("工具执行失败：" + ex.getClass().getSimpleName(), List.of());
                 }
             }
-            turn.tools.add(new ToolExecution(call.name(), Objects.toString(call.arguments(), ""), result));
-            responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), result));
         }
-        messages.add(ToolResponseMessage.builder().responses(responses).build());
-        return scheduleRound(client, messages, conversationId, question, turn, round + 1);
+        return new ToolOutcome("工具未找到：" + call.name(), List.of());
+    }
+
+    private record ToolOutcome(String result, List<String> references) {
     }
 
     static List<String> extractSourceLinks(String result, ObjectMapper mapper) throws JsonProcessingException {
         String source = result.startsWith("\"") ? mapper.readTree(result).asText() : result;
-        return source.lines().filter(line -> line.startsWith("https://") || line.startsWith("http://")).toList();
+        return SOURCE_URL.matcher(source).results().map(match -> match.group()).distinct().toList();
     }
 
     private Flux<ChatEvent> forceFinalStream(
