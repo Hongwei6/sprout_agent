@@ -13,14 +13,14 @@
 
 ## 运行
 
-项目根目录 `.env` 保存本机凭证（包括 DeepSeek API Key 和 Nacos 登录凭证），该文件已被 `.gitignore` 排除。应用启动时读取 `.env`，因此可通过 `./run.sh` 或 IDE 启动；Nacos 提供其余运行配置：
+项目根目录 `.env` 保存本机凭证（包括 DeepSeek API Key 和 Nacos 登录凭证），已被 `.gitignore` 排除。Spring Boot 从工作目录按 properties 格式读取 `.env`；可通过 `./run.sh` 或以项目根目录为工作目录从 IDE 启动。操作系统环境变量优先于 `.env`：
 
 ```sh
 ./run.sh
 ```
 
 Nacos 地址为 `10.244.0.111:8848`，命名空间 `sprout_agent`，配置 Data ID `sprout-agent-zerotier.yaml`、Group `DEFAULT_GROUP`。DeepSeek API Key 通过 `${SPRING_AI_OPENAI_API_KEY}` 从本机环境读取，不存入 Nacos。
-配置在应用启动时从 Nacos 读取；修改后重启应用生效。应用使用 Nacos HTTP 配置 API，以兼容当前的 Nacos Server 2.1.0。
+`application.yml` 使用 Spring Cloud Alibaba Nacos Config 导入 `sprout_agent` 命名空间的 YAML；无需自定义配置加载器。修改 Nacos 配置后重启应用生效。
 
 打开 <http://localhost:8080>。聊天 API 为 `POST /api/chat`，请求体 `{"message":"你好"}`。
 

@@ -1,7 +1,14 @@
 spring:
   application:
     name: sprout-agent
-
-sprout:
-  nacos:
-    namespace: sprout_agent
+  config:
+    import:
+      - optional:file:.env[.properties]
+      - nacos:sprout-agent-zerotier.yaml?group=DEFAULT_GROUP&refreshEnabled=false
+  cloud:
+    nacos:
+      config:
+        server-addr: ${NACOS_SERVER_ADDR:10.244.0.111:8848}
+        namespace: sprout_agent
+        username: ${NACOS_USERNAME}
+        password: ${NACOS_PASSWORD}
