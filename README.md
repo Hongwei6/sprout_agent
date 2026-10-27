@@ -33,6 +33,8 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 - `GET /api/conversations/{id}`：对话及消息；每条助手消息包含 `references` 来源数组和 `recommendations` 推荐问题数组（没有时为空数组）。
 - `DELETE /api/conversations/{id}`：删除对话
 - `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 依次发送 `conversation`、`delta`（答案片段）、可选的 `reference`（来源）、可选的 `recommend`（推荐问题）和 `done`；工具状态通过 `thinking` 推送，异常发送 `error`。`recommend` 的 `data` 如 `{"type":"recommend","content":["下一步怎么做？","还有什么限制？","有哪些例子？"]}`。推荐生成失败时跳过该事件，仍保存答案并完成对话。
+前端对流式回答及历史回答统一渲染 Markdown，渲染后的 HTML 经 DOMPurify 清理；用户输入仍按纯文本展示。Markdown 解析器和清理器从固定版本的 jsDelivr 加载，无法加载时回答退回纯文本。参考来源默认折叠，展开后鼠标悬停或键盘聚焦链接可预览摘要，点击链接在新标签页打开有效 HTTP(S) 来源。
+
 
 聊天使用流式 ReAct 轮次：识别工具调用、合并同一调用的参数分片、并发执行 Tavily MCP 工具，并将工具结果（包括失败信息）回填当前上下文供下一轮推理；开始执行时推送 `thinking` 状态。无工具调用即结束；超过 `sprout.agent.max-rounds` 后不再提供工具，强制生成最终回答。默认最多 5 轮；设置为 0 表示不限制轮次。`sprout.agent.max-messages` 控制每次注入模型的历史消息数，必须为至少 2 的偶数；Nacos YAML 配置为 20（至多最近 10 轮完整问答），只限制推理窗口，不删除 MySQL 的完整历史。
 最终答案生成后，使用历史窗口、当前问题与完整回答进行一次非流式模型调用，生成恰好 3 个不同的推荐问题。默认启用，可用 `sprout.agent.enable-recommendations: false` 关闭；推荐仅用于展示和持久化，不进入后续对话的推理记忆。

@@ -64,10 +64,30 @@ function startConversation() {
   renderHistory();
 }
 
+function renderAnswer(bubble, text) {
+  if (!window.marked || !window.DOMPurify) {
+    bubble.textContent = text;
+    return;
+  }
+  bubble.innerHTML = DOMPurify.sanitize(marked.parse(text), {
+    USE_PROFILES: { html: true },
+    FORBID_TAGS: ['img', 'iframe', 'form', 'style']
+  });
+  for (const link of bubble.querySelectorAll('a[href]')) {
+    if (!['http:', 'https:'].includes(new URL(link.href).protocol)) {
+      link.removeAttribute('href');
+      continue;
+    }
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+  }
+}
+
 function addMessage(role, text) {
   const bubble = document.createElement('div');
   bubble.className = `message ${role}`;
-  bubble.textContent = text;
+  if (role === 'assistant') renderAnswer(bubble, text);
+  else bubble.textContent = text;
   messages.append(bubble);
   bubble.scrollIntoView({ block: 'nearest' });
   return bubble;
@@ -75,7 +95,7 @@ function addMessage(role, text) {
 
 function addReferences(references) {
   if (!Array.isArray(references)) return;
-  const section = document.createElement('section');
+  const section = document.createElement('details');
   section.className = 'references';
   const list = document.createElement('ol');
   for (const source of references) {
@@ -93,19 +113,24 @@ function addReferences(references) {
     link.rel = 'noopener noreferrer';
     link.textContent = source.title || source.url;
     item.append(link);
+    const preview = document.createElement('div');
+    preview.className = 'reference-preview';
+    const address = document.createElement('small');
+    address.textContent = url.hostname;
+    preview.append(address);
     if (source.content) {
       const excerpt = document.createElement('p');
       excerpt.textContent = source.content;
-      item.append(excerpt);
+      preview.append(excerpt);
     }
+    item.append(preview);
     list.append(item);
   }
   if (!list.childElementCount) return;
-  const heading = document.createElement('strong');
+  const heading = document.createElement('summary');
   heading.textContent = `参考来源（${list.childElementCount}）`;
   section.append(heading, list);
   messages.append(section);
-  section.scrollIntoView({ block: 'nearest' });
 }
 function addRecommendations(questions) {
   if (!Array.isArray(questions) || !questions.length) return;
@@ -152,6 +177,7 @@ form.addEventListener('submit', async (event) => {
     });
     if (!response.ok || !response.body) throw new Error('无法开始对话');
     const bubble = token === viewToken ? addMessage('assistant', '') : null;
+    let answer = '';
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -177,7 +203,8 @@ form.addEventListener('submit', async (event) => {
             searchStatus.remove();
             searchStatus = null;
           }
-          bubble.textContent += data;
+          answer += data;
+          renderAnswer(bubble, answer);
           bubble.scrollIntoView({ block: 'nearest' });
         }
         if (name === 'reference' && token === viewToken) {
