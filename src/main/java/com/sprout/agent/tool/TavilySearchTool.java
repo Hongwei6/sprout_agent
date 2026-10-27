@@ -1,4 +1,4 @@
-package com.sprout.agent.chat;
+package com.sprout.agent.tool;
 
 import java.time.Duration;
 import java.util.List;

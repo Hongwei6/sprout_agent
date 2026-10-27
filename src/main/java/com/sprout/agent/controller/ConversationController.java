@@ -1,5 +1,6 @@
-package com.sprout.agent.chat;
+package com.sprout.agent.controller;
 
+import com.sprout.agent.service.ConversationService;
 import jakarta.validation.constraints.Pattern;
 import java.util.List;
 import org.springframework.http.ResponseEntity;

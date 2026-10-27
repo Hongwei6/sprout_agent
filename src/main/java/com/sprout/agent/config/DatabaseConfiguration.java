@@ -1,4 +1,4 @@
-package com.sprout.agent.storage;
+package com.sprout.agent.config;
 
 import com.zaxxer.hikari.HikariDataSource;
 import org.springframework.ai.embedding.EmbeddingModel;

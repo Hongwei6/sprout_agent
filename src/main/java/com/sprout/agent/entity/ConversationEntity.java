@@ -1,4 +1,4 @@
-package com.sprout.agent.chat;
+package com.sprout.agent.entity;
 
 import com.baomidou.mybatisplus.annotation.TableId;
 import com.baomidou.mybatisplus.annotation.TableName;

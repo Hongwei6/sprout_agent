@@ -40,6 +40,10 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 
 当前还没有用户登录和对话隔离：可访问此应用的访客都能查看或删除历史对话。仅限可信内网使用；公开部署前需加入身份认证与按用户授权。
 
+## 代码结构
+
+`controller` 只处理 HTTP/SSE 和请求校验；`service` 负责 ReAct 轮次与会话事务；`entity` 映射 MySQL 表，`mapper` 承担数据访问；`tool` 封装 Tavily，`config` 管理 MySQL、pgvector 和 MinIO。各层位于 `src/main/java/com/sprout/agent/`，API 路径和表名保持不变。
+
 ## ZeroTier 服务
 
 配置来源：`/Users/hongwei/dev/workspace/serve` 中的服务器文档及项目根目录 `.env`。

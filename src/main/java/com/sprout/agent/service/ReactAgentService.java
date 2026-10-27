@@ -1,11 +1,8 @@
-package com.sprout.agent.chat;
+package com.sprout.agent.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import jakarta.validation.Valid;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.Pattern;
-import jakarta.validation.constraints.Size;
+import com.sprout.agent.tool.TavilySearchTool;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
@@ -22,20 +19,12 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
-import org.springframework.http.ResponseEntity;
-import org.springframework.http.codec.ServerSentEvent;
-import org.springframework.web.bind.annotation.PostMapping;
-import org.springframework.web.bind.annotation.RequestBody;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
+import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 import reactor.core.scheduler.Schedulers;
 
-@RestController
-@RequestMapping("/api/chat")
-public class ChatController {
+@Service
+public class ReactAgentService {
 
     private static final String LOCAL_API_KEY_PLACEHOLDER = "local-placeholder";
 
@@ -48,7 +37,7 @@ public class ChatController {
     private final int maxRounds;
     private final int maxMessages;
 
-    public ChatController(
+    public ReactAgentService(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
             ConversationService conversationService,
             ObjectMapper objectMapper,
@@ -70,24 +59,25 @@ public class ChatController {
         this.maxMessages = maxMessages;
     }
 
-    @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
-    public ResponseEntity<Flux<ServerSentEvent<String>>> chat(@Valid @RequestBody ChatRequest request) {
-        ChatClient.Builder builder = chatClientBuilder.getIfAvailable();
-        if (apiKey.isBlank() || LOCAL_API_KEY_PLACEHOLDER.equals(apiKey) || model.isBlank() || builder == null) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
-        }
-        return ResponseEntity.ok(Flux.defer(() -> {
-            String conversationId = conversationService.createConversation(request.conversationId(), request.message());
-            ChatMemory memory = conversationService.createPersistentChatMemory(conversationId, maxMessages);
-            List<Message> messages = new ArrayList<>(memory.get(conversationId));
-            messages.add(new UserMessage(request.message()));
-            return Flux.just(event("conversation", conversationId))
-                    .concatWith(scheduleRound(builder.build(), messages, conversationId, request.message(), new TurnState(), 1))
-                    .onErrorResume(ex -> Flux.just(event("error", "对话生成失败，请稍后重试。")));
-        }));
+    public boolean isAvailable() {
+        return !apiKey.isBlank() && !LOCAL_API_KEY_PLACEHOLDER.equals(apiKey)
+                && !model.isBlank() && chatClientBuilder.getIfAvailable() != null;
     }
 
-    private Flux<ServerSentEvent<String>> scheduleRound(
+    public Flux<ChatEvent> stream(String requestedConversationId, String question) {
+        ChatClient.Builder builder = chatClientBuilder.getIfAvailable();
+        return Flux.defer(() -> {
+            String conversationId = conversationService.createConversation(requestedConversationId, question);
+            ChatMemory memory = conversationService.createPersistentChatMemory(conversationId, maxMessages);
+            List<Message> messages = new ArrayList<>(memory.get(conversationId));
+            messages.add(new UserMessage(question));
+            return Flux.just(event("conversation", conversationId))
+                    .concatWith(scheduleRound(builder.build(), messages, conversationId, question, new TurnState(), 1))
+                    .onErrorResume(ex -> Flux.just(event("error", "对话生成失败，请稍后重试。")));
+        });
+    }
+
+    private Flux<ChatEvent> scheduleRound(
             ChatClient client, List<Message> messages, String conversationId, String question, TurnState turn, int round) {
         RoundState state = new RoundState();
         return client.prompt().messages(messages)
@@ -99,7 +89,7 @@ public class ChatController {
                         .subscribeOn(Schedulers.boundedElastic()));
     }
 
-    private Flux<ServerSentEvent<String>> processChunk(ChatResponse chunk, RoundState state, TurnState turn) {
+    private Flux<ChatEvent> processChunk(ChatResponse chunk, RoundState state, TurnState turn) {
         if (chunk.getResult() == null || chunk.getResult().getOutput() == null) return Flux.empty();
         AssistantMessage output = chunk.getResult().getOutput();
         Object reasoning = output.getMetadata().get("reasoningContent");
@@ -132,7 +122,7 @@ public class ChatController {
         state.toolCalls.add(incoming);
     }
 
-    private Flux<ServerSentEvent<String>> finishRound(
+    private Flux<ChatEvent> finishRound(
             ChatClient client, List<Message> messages, String conversationId, String question,
             TurnState turn, int round, RoundState state) {
         if (!state.toolMode) {
@@ -177,7 +167,7 @@ public class ChatController {
         return source.lines().filter(line -> line.startsWith("https://") || line.startsWith("http://")).toList();
     }
 
-    private Flux<ServerSentEvent<String>> forceFinalStream(
+    private Flux<ChatEvent> forceFinalStream(
             ChatClient client, List<Message> messages, String conversationId, String question, TurnState turn) {
         RoundState state = new RoundState();
         List<Message> finalMessages = new ArrayList<>(messages);
@@ -200,8 +190,11 @@ public class ChatController {
                 firstResponseMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
     }
 
-    private static ServerSentEvent<String> event(String name, String data) {
-        return ServerSentEvent.<String>builder().event(name).data(data).build();
+    private static ChatEvent event(String name, String data) {
+        return new ChatEvent(name, data);
+    }
+
+    public record ChatEvent(String name, String data) {
     }
 
     static class RoundState {
@@ -225,8 +218,4 @@ public class ChatController {
     private record ToolExecution(String name, String arguments, String result) {
     }
 
-    public record ChatRequest(
-            @Pattern(regexp = "[0-9a-f]{32}") String conversationId,
-            @NotBlank @Size(max = 4000) String message) {
-    }
 }

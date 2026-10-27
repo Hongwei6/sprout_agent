@@ -1,4 +1,4 @@
-package com.sprout.agent.storage;
+package com.sprout.agent.config;
 
 import io.minio.MinioClient;
 import org.springframework.boot.context.properties.ConfigurationProperties;

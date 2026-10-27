@@ -1,4 +1,4 @@
-package com.sprout.agent.chat;
+package com.sprout.agent.mapper;
 
 import org.apache.ibatis.annotations.Insert;
 import org.apache.ibatis.annotations.Mapper;

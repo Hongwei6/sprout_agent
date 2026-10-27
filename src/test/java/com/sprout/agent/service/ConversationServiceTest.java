@@ -1,4 +1,4 @@
-package com.sprout.agent.chat;
+package com.sprout.agent.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
@@ -6,6 +6,11 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.sprout.agent.entity.ChatMessageEntity;
+import com.sprout.agent.entity.ConversationEntity;
+import com.sprout.agent.mapper.ChatMessageMapper;
+import com.sprout.agent.mapper.ChatTurnDetailMapper;
+import com.sprout.agent.mapper.ConversationMapper;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;

@@ -1,4 +1,4 @@
-package com.sprout.agent.chat;
+package com.sprout.agent.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
@@ -7,18 +7,18 @@ import java.util.List;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 
-class ChatControllerTest {
+class ReactAgentServiceTest {
 
     @Test
     void mergesInterleavedToolArgumentFragmentsByCallId() {
-        ChatController.RoundState state = new ChatController.RoundState();
-        ChatController.mergeToolCall(state,
+        ReactAgentService.RoundState state = new ReactAgentService.RoundState();
+        ReactAgentService.mergeToolCall(state,
                 new AssistantMessage.ToolCall("first", "function", "searchWeb", "{\"query\":\"Tav"));
-        ChatController.mergeToolCall(state,
+        ReactAgentService.mergeToolCall(state,
                 new AssistantMessage.ToolCall("second", "function", "searchWeb", "{\"query\":\"Spring"));
-        ChatController.mergeToolCall(state,
+        ReactAgentService.mergeToolCall(state,
                 new AssistantMessage.ToolCall("first", "function", "searchWeb", "ily\"}"));
-        ChatController.mergeToolCall(state,
+        ReactAgentService.mergeToolCall(state,
                 new AssistantMessage.ToolCall("second", "function", "searchWeb", " AI\"}"));
 
         assertEquals(2, state.toolCalls.size());
@@ -34,6 +34,6 @@ class ChatControllerTest {
 
         assertEquals(List.of("https://docs.tavily.com/agents",
                         "https://docs.tavily.com/documentation/api-reference"),
-                ChatController.extractSourceLinks(result, mapper));
+                ReactAgentService.extractSourceLinks(result, mapper));
     }
 }

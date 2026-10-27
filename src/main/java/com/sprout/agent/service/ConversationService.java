@@ -1,6 +1,11 @@
-package com.sprout.agent.chat;
+package com.sprout.agent.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.sprout.agent.entity.ChatMessageEntity;
+import com.sprout.agent.entity.ConversationEntity;
+import com.sprout.agent.mapper.ChatMessageMapper;
+import com.sprout.agent.mapper.ChatTurnDetailMapper;
+import com.sprout.agent.mapper.ConversationMapper;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
