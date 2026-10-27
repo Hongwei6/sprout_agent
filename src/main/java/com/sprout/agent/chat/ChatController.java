@@ -26,16 +26,19 @@ public class ChatController {
 
     private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
     private final ConversationService conversationService;
+    private final TavilySearchTool tavilySearchTool;
     private final String apiKey;
     private final String model;
 
     public ChatController(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
             ConversationService conversationService,
+            TavilySearchTool tavilySearchTool,
             @Value("${spring.ai.openai.api-key:}") String apiKey,
             @Value("${spring.ai.openai.chat.options.model:}") String model) {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
+        this.tavilySearchTool = tavilySearchTool;
         this.apiKey = apiKey;
         this.model = model;
     }
@@ -54,7 +57,9 @@ public class ChatController {
                         ? new UserMessage(message.text())
                         : new AssistantMessage(message.text())))
                 .toList();
-        String answer = builder.build().prompt().messages(promptMessages).call().content();
+        String answer = builder.build().prompt().messages(promptMessages)
+                .tools(tavilySearchTool)
+                .call().content();
         conversationService.saveAssistantMessage(conversationId, answer);
         return ResponseEntity.ok(new ChatResponse(conversationId, answer));
     }
