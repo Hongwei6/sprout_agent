@@ -33,7 +33,10 @@ async function refreshHistory() {
 function renderConversation(conversation) {
   messages.replaceChildren();
   welcome.hidden = conversation.messages.length > 0;
-  for (const item of conversation.messages) addMessage(item.role, item.text);
+  for (const item of conversation.messages) {
+    addMessage(item.role, item.text);
+    if (item.role === 'assistant') addReferences(item.references);
+  }
   messages.scrollTop = messages.scrollHeight;
 }
 
@@ -67,6 +70,41 @@ function addMessage(role, text) {
   messages.append(bubble);
   bubble.scrollIntoView({ block: 'nearest' });
   return bubble;
+}
+
+function addReferences(references) {
+  if (!Array.isArray(references)) return;
+  const section = document.createElement('section');
+  section.className = 'references';
+  const list = document.createElement('ol');
+  for (const source of references) {
+    let url;
+    try {
+      url = new URL(source.url);
+      if (!['http:', 'https:'].includes(url.protocol)) continue;
+    } catch {
+      continue;
+    }
+    const item = document.createElement('li');
+    const link = document.createElement('a');
+    link.href = url.href;
+    link.target = '_blank';
+    link.rel = 'noopener noreferrer';
+    link.textContent = source.title || source.url;
+    item.append(link);
+    if (source.content) {
+      const excerpt = document.createElement('p');
+      excerpt.textContent = source.content;
+      item.append(excerpt);
+    }
+    list.append(item);
+  }
+  if (!list.childElementCount) return;
+  const heading = document.createElement('strong');
+  heading.textContent = `参考来源（${list.childElementCount}）`;
+  section.append(heading, list);
+  messages.append(section);
+  section.scrollIntoView({ block: 'nearest' });
 }
 
 form.addEventListener('submit', async (event) => {
@@ -119,6 +157,13 @@ form.addEventListener('submit', async (event) => {
           }
           bubble.textContent += data;
           bubble.scrollIntoView({ block: 'nearest' });
+        }
+        if (name === 'reference' && token === viewToken) {
+          const reference = JSON.parse(data);
+          if (reference.type === 'reference') {
+            addReferences(typeof reference.content === 'string'
+              ? JSON.parse(reference.content) : reference.content);
+          }
         }
         if (name === 'error') throw new Error(data);
         if (name === 'done') {

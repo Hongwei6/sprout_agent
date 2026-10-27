@@ -6,6 +6,8 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sprout.agent.dto.SearchResult;
 import com.sprout.agent.entity.ChatMessageEntity;
 import com.sprout.agent.entity.ConversationEntity;
 import com.sprout.agent.mapper.ChatMessageMapper;
@@ -43,7 +45,7 @@ class ConversationServiceTest {
             return recent;
         });
 
-        ConversationService service = new ConversationService(conversations, messages, details);
+        ConversationService service = new ConversationService(conversations, messages, details, new ObjectMapper());
         service.saveExchange("session", "第一问", result("第一答"));
         service.saveExchange("session", "第二问", result("第二答"));
         service.saveExchange("session", "第三问", result("第三答"));
@@ -75,11 +77,42 @@ class ConversationServiceTest {
         when(messages.selectList(any())).thenReturn(List.of(
                 row("user", "旧的失败请求"), completedAnswer, completedQuestion));
 
-        List<Message> restored = new ConversationService(conversations, messages, details)
+        List<Message> restored = new ConversationService(conversations, messages, details, new ObjectMapper())
                 .createPersistentChatMemory("session", 4).get("session");
         assertEquals(2, restored.size());
         assertEquals("已完成问题", restored.get(0).getText());
         assertEquals("已完成答案", restored.get(1).getText());
+    }
+
+    @Test
+    void conversationHistoryRestoresStructuredAndLegacyReferencesWithTheirAnswers() {
+        ConversationMapper conversations = mock(ConversationMapper.class);
+        ChatMessageMapper messages = mock(ChatMessageMapper.class);
+        ChatTurnDetailMapper details = mock(ChatTurnDetailMapper.class);
+        ConversationEntity conversation = new ConversationEntity();
+        conversation.setId("session");
+        when(conversations.selectById("session")).thenReturn(conversation);
+        ChatMessageEntity question = row("user", "问题");
+        question.setId(1L);
+        ChatMessageEntity answer = row("assistant", "答案");
+        answer.setId(2L);
+        ChatMessageEntity olderAnswer = row("assistant", "旧答案");
+        olderAnswer.setId(3L);
+        when(messages.selectList(any())).thenReturn(List.of(question, answer, olderAnswer));
+        when(details.findReferences("session")).thenReturn(List.of(
+                new ChatTurnDetailMapper.ReferenceRow(2L,
+                        "[{\"url\":\"https://docs.tavily.com\",\"title\":\"Tavily 文档\",\"content\":\"摘要\"}]"),
+                new ChatTurnDetailMapper.ReferenceRow(3L, "[\"https://example.org/legacy\"]")));
+
+        List<ConversationService.MessageView> history =
+                new ConversationService(conversations, messages, details, new ObjectMapper())
+                        .getConversation("session").messages();
+
+        assertEquals(List.of(), history.get(0).references());
+        assertEquals(List.of(new SearchResult("https://docs.tavily.com", "Tavily 文档", "摘要")),
+                history.get(1).references());
+        assertEquals(List.of(new SearchResult("https://example.org/legacy", "https://example.org/legacy", "")),
+                history.get(2).references());
     }
 
     private static ConversationService.TurnResult result(String answer) {

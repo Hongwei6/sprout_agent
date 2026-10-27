@@ -3,6 +3,7 @@ package com.sprout.agent.service;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sprout.agent.dto.SearchResult;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -30,13 +31,14 @@ class ReactAgentServiceTest {
     @Test
     void extractsMcpSearchReferencesFromNestedJsonContent() throws Exception {
         ObjectMapper mapper = new ObjectMapper();
-        String result = mapper.writeValueAsString(
-                Map.of("content", List.of(Map.of("type", "text", "text",
-                        "{\"results\":[{\"url\":\"https://docs.tavily.com/agents\"},"
-                                + "{\"url\":\"https://docs.tavily.com/documentation/api-reference\"}]}"))));
+        String result = mapper.writeValueAsString(List.of(Map.of("text", mapper.writeValueAsString(
+                Map.of("results", List.of(
+                        Map.of("url", "https://docs.tavily.com/agents", "title", "Agents", "content", "Agent guide"),
+                        Map.of("url", "javascript:alert(1)", "title", "Bad", "content", "Not a source"),
+                        Map.of("url", "https://docs.tavily.com/api", "title", "API", "content", "API guide")))))));
 
-        assertEquals(List.of("https://docs.tavily.com/agents",
-                        "https://docs.tavily.com/documentation/api-reference"),
-                ReactAgentService.extractSourceLinks(result, mapper));
+        assertEquals(List.of(new SearchResult("https://docs.tavily.com/agents", "Agents", "Agent guide"),
+                        new SearchResult("https://docs.tavily.com/api", "API", "API guide")),
+                ReactAgentService.parseSearchResults(result, mapper));
     }
 }

@@ -1,13 +1,15 @@
 package com.sprout.agent.service;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sprout.agent.dto.SearchResult;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReferenceArray;
-import java.util.regex.Pattern;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -29,7 +31,6 @@ import reactor.core.scheduler.Schedulers;
 public class ReactAgentService {
 
     private static final String LOCAL_API_KEY_PLACEHOLDER = "local-placeholder";
-    private static final Pattern SOURCE_URL = Pattern.compile("https?://[^\\s\"\\\\<>]+");
 
     private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
     private final ConversationService conversationService;
@@ -129,8 +130,7 @@ public class ReactAgentService {
             ChatClient client, List<Message> messages, String conversationId, String question,
             TurnState turn, int round, RoundState state) {
         if (!state.toolMode) {
-            saveResult(conversationId, question, state.text.toString(), turn);
-            return Flux.just(event("done", ""));
+            return finishAnswer(conversationId, question, state.text.toString(), turn);
         }
         if (maxRounds > 0 && round >= maxRounds) {
             return forceFinalStream(client, messages, conversationId, question, turn);
@@ -150,7 +150,9 @@ public class ReactAgentService {
                         AssistantMessage.ToolCall call = state.toolCalls.get(i);
                         ToolOutcome outcome = outcomes.get(i);
                         turn.tools.add(new ToolExecution(call.name(), Objects.toString(call.arguments(), ""), outcome.result()));
-                        turn.references.addAll(outcome.references());
+                        for (SearchResult reference : outcome.references()) {
+                            turn.searchResults.putIfAbsent(reference.url(), reference);
+                        }
                         responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), outcome.result()));
                     }
                     messages.add(ToolResponseMessage.builder().responses(responses).build());
@@ -173,8 +175,8 @@ public class ReactAgentService {
             if (tool.getToolDefinition().name().equals(call.name())) {
                 try {
                     String result = tool.call(call.arguments());
-                    return new ToolOutcome(result, call.name().contains("tavily")
-                            ? extractSourceLinks(result, objectMapper) : List.of());
+                    return new ToolOutcome(result, call.name().contains("tavily_search")
+                            ? parseSearchResults(result, objectMapper) : List.of());
                 } catch (Exception ex) {
                     return new ToolOutcome("工具执行失败：" + ex.getClass().getSimpleName(), List.of());
                 }
@@ -183,12 +185,41 @@ public class ReactAgentService {
         return new ToolOutcome("工具未找到：" + call.name(), List.of());
     }
 
-    private record ToolOutcome(String result, List<String> references) {
+    private record ToolOutcome(String result, List<SearchResult> references) {
     }
 
-    static List<String> extractSourceLinks(String result, ObjectMapper mapper) throws JsonProcessingException {
-        String source = result.startsWith("\"") ? mapper.readTree(result).asText() : result;
-        return SOURCE_URL.matcher(source).results().map(match -> match.group()).distinct().toList();
+    static List<SearchResult> parseSearchResults(String result, ObjectMapper mapper) throws JsonProcessingException {
+        List<SearchResult> references = new ArrayList<>();
+        collectSearchResults(mapper.readTree(result), mapper, references);
+        return references;
+    }
+
+    private static void collectSearchResults(JsonNode node, ObjectMapper mapper, List<SearchResult> references)
+            throws JsonProcessingException {
+        if (node.isArray()) {
+            for (JsonNode item : node) collectSearchResults(item, mapper, references);
+            return;
+        }
+        if (!node.isObject()) return;
+        JsonNode results = node.path("results");
+        if (results.isArray()) {
+            for (JsonNode item : results) {
+                String url = item.path("url").asText("");
+                if (!url.startsWith("https://") && !url.startsWith("http://")) continue;
+                String content = item.path("content").asText("").strip();
+                references.add(new SearchResult(url, item.path("title").asText(""),
+                        content.substring(0, Math.min(content.length(), 300))));
+            }
+        }
+        JsonNode text = node.path("text");
+        if (text.isTextual()) {
+            String value = text.asText().stripLeading();
+            if (value.startsWith("{") || value.startsWith("[")) {
+                collectSearchResults(mapper.readTree(value), mapper, references);
+            }
+        }
+        JsonNode content = node.path("content");
+        if (content.isArray()) collectSearchResults(content, mapper, references);
     }
 
     private Flux<ChatEvent> forceFinalStream(
@@ -198,20 +229,24 @@ public class ReactAgentService {
         finalMessages.add(new UserMessage("请基于已有信息直接回答，不再调用工具。"));
         return client.prompt().messages(finalMessages).stream().chatResponse()
                 .concatMap(chunk -> processChunk(chunk, state, turn))
-                .concatWith(Flux.defer(() -> {
-                    saveResult(conversationId, question, state.text.toString(), turn);
-                    return Flux.just(event("done", ""));
-                }));
+                .concatWith(Flux.defer(() -> finishAnswer(conversationId, question, state.text.toString(), turn)));
     }
 
-    private void saveResult(String conversationId, String question, String answer, TurnState turn) {
+    private Flux<ChatEvent> finishAnswer(String conversationId, String question, String answer, TurnState turn) {
+        String referencesJson = objectMapper.valueToTree(turn.searchResults.values()).toString();
         Long firstResponseMs = turn.firstResponseNanos == 0 ? null
                 : TimeUnit.NANOSECONDS.toMillis(turn.firstResponseNanos - turn.startedNanos);
         conversationService.saveExchange(conversationId, question, new ConversationService.TurnResult(
                 answer, turn.thinking.isEmpty() ? null : turn.thinking.toString(),
-                objectMapper.valueToTree(turn.tools).toString(),
-                objectMapper.valueToTree(turn.references).toString(),
+                objectMapper.valueToTree(turn.tools).toString(), referencesJson,
                 firstResponseMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
+        if (turn.searchResults.isEmpty()) return Flux.just(event("done", ""));
+        String payload = objectMapper.valueToTree(
+                new ReferenceResponse("reference", referencesJson, turn.searchResults.size())).toString();
+        return Flux.just(event("reference", payload), event("done", ""));
+    }
+
+    private record ReferenceResponse(String type, String content, int count) {
     }
 
     private static ChatEvent event(String name, String data) {
@@ -231,7 +266,7 @@ public class ReactAgentService {
         final long startedNanos = System.nanoTime();
         final StringBuilder thinking = new StringBuilder();
         final List<ToolExecution> tools = new ArrayList<>();
-        final List<String> references = new ArrayList<>();
+        final LinkedHashMap<String, SearchResult> searchResults = new LinkedHashMap<>();
         long firstResponseNanos;
 
         void markFirstResponse() {

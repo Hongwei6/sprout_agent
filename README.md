@@ -27,16 +27,16 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 
 打开 <http://localhost:8080>。聊天 API 为 `POST /api/chat`，请求体 `{"message":"你好"}`，响应为 `text/event-stream`（SSE）。
 
-每次请求根据 `conversationId` 从 MySQL 读取最近已完成的问答，重建本次请求专属的 `MessageWindowChatMemory`；运行期消息列表单独承载当前问题、流式模型输出和工具调用结果。只在成功生成最终答案后，于同一数据库事务保存当前问题、最终回答及回合明细；中断或失败的请求不写入问答。重启或多实例请求可从数据库恢复历史，历史页面仍展示完整问答；工具调用中间消息不注入下次模型上下文。
+每次请求根据 `conversationId` 从 MySQL 读取最近已完成的问答，重建本次请求专属的 `MessageWindowChatMemory`；运行期消息列表单独承载当前问题、流式模型输出和工具调用结果。只在成功生成最终答案后，于同一数据库事务保存当前问题、最终回答及回合明细；中断或失败的请求不写入问答。重启或多实例请求可从数据库恢复历史，历史页面仍展示完整问答和每条回答的参考来源；工具调用中间消息不注入下次模型上下文。
 
 - `GET /api/conversations`：最近 50 条对话
-- `GET /api/conversations/{id}`：对话及消息
+- `GET /api/conversations/{id}`：对话及消息；每条消息包含 `references` 数组（助手搜索结果中的 `url`、`title`、`content`，没有来源时为空数组）
 - `DELETE /api/conversations/{id}`：删除对话
-- `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 事件包含 `conversation`（ID）、`delta`（增量文本）、`thinking`（正在调用 MCP 工具的临时状态）和 `done`（完成）；异常发送 `error`。客户端只按 `delta` 拼接答案，`thinking` 不写入聊天记录。
+- `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 事件包含 `conversation`（ID）、`delta`（增量文本）、`thinking`（正在调用 MCP 工具的临时状态）、`reference`（若搜索产生有效来源，在最终回答之后、`done` 之前发送）和 `done`（完成）；异常发送 `error`。客户端只按 `delta` 拼接答案，`thinking` 不写入聊天记录。`reference` 的 `data` 示例：`{"type":"reference","content":"[{\"url\":\"https://example.org\",\"title\":\"示例\",\"content\":\"摘要\"}]","count":1}`，其中 `content` 是序列化后的来源数组 JSON。
 
 聊天使用流式 ReAct 轮次：识别工具调用、合并同一调用的参数分片、并发执行 Tavily MCP 工具，并将工具结果（包括失败信息）回填当前上下文供下一轮推理；开始执行时推送 `thinking` 状态。无工具调用即结束；超过 `sprout.agent.max-rounds` 后不再提供工具，强制生成最终回答。默认最多 5 轮；设置为 0 表示不限制轮次。`sprout.agent.max-messages` 控制每次注入模型的历史消息数，必须为至少 2 的偶数；Nacos YAML 配置为 20（至多最近 10 轮完整问答），只限制推理窗口，不删除 MySQL 的完整历史。
 
-启动时，`schema-mysql.sql` 在 MySQL 中幂等创建对话表和 `chat_turn_details` 回合明细表。回合明细以助手消息 ID 关联，保存模型实际返回的思考片段（未返回时为 `NULL`）、工具调用与结果 JSON、Tavily 来源链接 JSON，以及首次响应和总耗时（毫秒）；删除对话时由外键级联清理。思考内容、工具过程和来源不进入会话记忆。
+启动时，`schema-mysql.sql` 在 MySQL 中幂等创建对话表和 `chat_turn_details` 回合明细表。回合明细以助手消息 ID 关联，保存模型实际返回的思考片段（未返回时为 `NULL`）、工具调用与结果 JSON、Tavily 来源对象 JSON（按 URL 去重，含标题和最多 300 字摘要），以及首次响应和总耗时（毫秒）；删除对话时由外键级联清理。旧版仅含 URL 的来源数据仍能在历史页展示。思考内容、工具过程和来源不进入会话记忆。
 
 当前还没有用户登录和对话隔离：可访问此应用的访客都能查看或删除历史对话。仅限可信内网使用；公开部署前需加入身份认证与按用户授权。
 

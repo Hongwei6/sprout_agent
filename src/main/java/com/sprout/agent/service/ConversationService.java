@@ -1,13 +1,20 @@
 package com.sprout.agent.service;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sprout.agent.dto.SearchResult;
 import com.sprout.agent.entity.ChatMessageEntity;
 import com.sprout.agent.entity.ConversationEntity;
 import com.sprout.agent.mapper.ChatMessageMapper;
 import com.sprout.agent.mapper.ChatTurnDetailMapper;
 import com.sprout.agent.mapper.ConversationMapper;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.memory.MessageWindowChatMemory;
@@ -27,12 +34,14 @@ public class ConversationService {
     private final ConversationMapper conversationMapper;
     private final ChatMessageMapper messageMapper;
     private final ChatTurnDetailMapper detailMapper;
+    private final ObjectMapper objectMapper;
 
     public ConversationService(ConversationMapper conversationMapper, ChatMessageMapper messageMapper,
-            ChatTurnDetailMapper detailMapper) {
+            ChatTurnDetailMapper detailMapper, ObjectMapper objectMapper) {
         this.conversationMapper = conversationMapper;
         this.messageMapper = messageMapper;
         this.detailMapper = detailMapper;
+        this.objectMapper = objectMapper;
     }
 
     @Transactional
@@ -99,13 +108,34 @@ public class ConversationService {
 
     public ConversationDetail getConversation(String id) {
         ConversationEntity conversation = requireConversation(id);
-        List<MessageView> messages = messageMapper.selectList(new LambdaQueryWrapper<ChatMessageEntity>()
-                        .eq(ChatMessageEntity::getConversationId, id)
-                        .orderByAsc(ChatMessageEntity::getId))
-                .stream()
-                .map(message -> new MessageView(message.getRole(), message.getContent()))
+        List<ChatMessageEntity> rows = messageMapper.selectList(new LambdaQueryWrapper<ChatMessageEntity>()
+                .eq(ChatMessageEntity::getConversationId, id)
+                .orderByAsc(ChatMessageEntity::getId));
+        Map<Long, List<SearchResult>> references = new HashMap<>();
+        for (ChatTurnDetailMapper.ReferenceRow row : detailMapper.findReferences(id)) {
+            references.put(row.assistantMessageId(), readReferences(row.referencesJson()));
+        }
+        List<MessageView> messages = rows.stream()
+                .map(message -> new MessageView(message.getRole(), message.getContent(),
+                        references.getOrDefault(message.getId(), List.of())))
                 .toList();
         return new ConversationDetail(conversation.getId(), conversation.getTitle(), messages);
+    }
+
+    private List<SearchResult> readReferences(String json) {
+        if ("[]".equals(json)) return List.of();
+        try {
+            List<SearchResult> references = new ArrayList<>();
+            for (JsonNode item : objectMapper.readTree(json)) {
+                String url = item.isTextual() ? item.asText() : item.path("url").asText("");
+                if (!url.startsWith("https://") && !url.startsWith("http://")) continue;
+                references.add(new SearchResult(url, item.isTextual() ? url : item.path("title").asText(""),
+                        item.isTextual() ? "" : item.path("content").asText("")));
+            }
+            return references;
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Invalid stored conversation references", ex);
+        }
     }
 
     @Transactional
@@ -141,7 +171,7 @@ public class ConversationService {
     public record ConversationSummary(String id, String title, LocalDateTime updatedAt) {
     }
 
-    public record MessageView(String role, String text) {
+    public record MessageView(String role, String text, List<SearchResult> references) {
     }
 
     public record ConversationDetail(String id, String title, List<MessageView> messages) {
