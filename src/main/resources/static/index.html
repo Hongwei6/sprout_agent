@@ -21,6 +21,7 @@
         <button class="new-chat" id="new-chat" type="button"><span aria-hidden="true">＋</span> 开启新对话</button>
         <div class="sidebar-label">最近</div>
         <nav class="conversation-list" id="conversation-list" aria-label="最近对话"></nav>
+        <button class="history-open" id="history-open" type="button">历史对话与归档</button>
         <div class="sidebar-bottom">
           <div class="profile-avatar" aria-hidden="true">萌</div>
           <div class="profile-copy"><strong>访客</strong><span>萌芽 AI 助手</span></div>
@@ -32,6 +33,7 @@
         <header class="topbar">
           <button class="mobile-brand" id="mobile-new-chat" type="button" aria-label="开启新对话"><span class="brand-mark">芽</span><span>萌芽</span></button>
           <div class="model-label"><span class="status-dot"></span> 萌芽助手 <span class="model-tag">预览版</span></div>
+          <button class="icon-button mobile-history" id="mobile-history" type="button" aria-label="历史对话" title="历史对话">◷</button>
           <button class="icon-button" id="clear-chat" type="button" aria-label="清空当前对话" title="清空当前对话">⌫</button>
         </header>
 
@@ -64,5 +66,13 @@
         </footer>
       </main>
     </div>
+    <dialog id="history-dialog" aria-label="历史对话">
+      <div class="history-header"><strong>历史对话</strong><button type="button" id="history-close" aria-label="关闭">×</button></div>
+      <div class="history-filters">
+        <input id="history-search" type="search" placeholder="搜索对话标题" aria-label="搜索对话标题" />
+        <select id="history-filter" aria-label="对话状态"><option value="false">未归档</option><option value="true">已归档</option></select>
+      </div>
+      <div id="history-results" class="history-results"></div>
+    </dialog>
   </body>
 </html>

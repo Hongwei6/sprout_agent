@@ -52,11 +52,15 @@ public class ConversationService {
             conversation = new ConversationEntity();
             conversation.setId(UUID.randomUUID().toString().replace("-", ""));
             conversation.setTitle(question.substring(0, Math.min(question.length(), TITLE_LENGTH)));
+            conversation.setArchived(false);
             conversation.setCreatedAt(now);
             conversation.setUpdatedAt(now);
             conversationMapper.insert(conversation);
         } else {
             conversation = requireConversation(conversationId);
+            if (Boolean.TRUE.equals(conversation.getArchived())) {
+                throw new ResponseStatusException(HttpStatus.CONFLICT, "请先恢复已归档的对话");
+            }
         }
         return conversation.getId();
     }
@@ -73,15 +77,38 @@ public class ConversationService {
         conversationMapper.updateById(conversation);
     }
 
-    public List<ConversationSummary> listConversations() {
+    public List<ConversationSummary> listConversations(boolean archived, String query) {
+        String search = query == null ? "" : query.strip();
         return conversationMapper.selectList(new LambdaQueryWrapper<ConversationEntity>()
+                        .eq(ConversationEntity::getArchived, archived)
+                        .like(!search.isEmpty(), ConversationEntity::getTitle, search)
                         .orderByDesc(ConversationEntity::getUpdatedAt)
+                        .orderByDesc(ConversationEntity::getId)
                         .last("LIMIT " + HISTORY_LIMIT))
                 .stream()
                 .map(conversation -> new ConversationSummary(
                         conversation.getId(), conversation.getTitle(), conversation.getUpdatedAt()))
                 .toList();
     }
+
+    @Transactional
+    public void setArchived(String id, boolean archived) {
+        ConversationEntity conversation = requireConversation(id);
+        if (Boolean.TRUE.equals(conversation.getArchived()) == archived) return;
+        conversation.setArchived(archived);
+        conversationMapper.updateById(conversation);
+    }
+    @Transactional
+    public void renameConversation(String id, String title) {
+        String normalized = title.strip();
+        if (normalized.isEmpty() || normalized.length() > TITLE_LENGTH) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "标题长度必须为 1 到 50 个字符");
+        }
+        ConversationEntity conversation = requireConversation(id);
+        conversation.setTitle(normalized);
+        conversationMapper.updateById(conversation);
+    }
+
 
     public ChatMemory createPersistentChatMemory(String conversationId, int maxMessages) {
         if (maxMessages < 2 || maxMessages % 2 != 0) {
@@ -123,7 +150,8 @@ public class ConversationService {
                             detail == null ? List.of() : readRecommendations(detail.recommendationsJson()));
                 })
                 .toList();
-        return new ConversationDetail(conversation.getId(), conversation.getTitle(), messages);
+        return new ConversationDetail(conversation.getId(), conversation.getTitle(),
+                Boolean.TRUE.equals(conversation.getArchived()), messages);
     }
 
     private List<SearchResult> readReferences(String json) {
@@ -187,6 +215,6 @@ public class ConversationService {
     public record MessageView(String role, String text, List<SearchResult> references, List<String> recommendations) {
     }
 
-    public record ConversationDetail(String id, String title, List<MessageView> messages) {
+    public record ConversationDetail(String id, String title, boolean archived, List<MessageView> messages) {
     }
 }

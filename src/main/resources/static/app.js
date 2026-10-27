@@ -4,23 +4,82 @@ const sendButton = document.querySelector('#send-button');
 const messages = document.querySelector('#messages');
 const welcome = document.querySelector('#welcome');
 const historyList = document.querySelector('#conversation-list');
+const historyDialog = document.querySelector('#history-dialog');
+const historySearch = document.querySelector('#history-search');
+const historyFilter = document.querySelector('#history-filter');
+const historyResults = document.querySelector('#history-results');
+const renameIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></svg>';
+const archiveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v4H4zM6 8v12h12V8M10 12h4"/></svg>';
 
 let conversations = [];
 let activeId = null;
 let viewToken = 0;
 let isSending = false;
+let activeArchived = false;
+let historyRequest = 0;
 
 function renderHistory() {
   historyList.replaceChildren();
   for (const conversation of conversations) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = `history-item${conversation.id === activeId ? ' active' : ''}`;
-    button.textContent = conversation.title;
-    button.title = conversation.title;
-    button.addEventListener('click', () => openConversation(conversation.id));
-    historyList.append(button);
+    const row = document.createElement('div');
+    row.className = `history-entry${conversation.id === activeId ? ' active' : ''}`;
+    const title = document.createElement('button');
+    title.type = 'button';
+    title.className = 'history-item';
+    title.textContent = conversation.title;
+    title.title = conversation.title;
+    title.addEventListener('click', () => openConversation(conversation.id));
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.className = 'conversation-action';
+    rename.innerHTML = renameIcon;
+    rename.title = `重命名：${conversation.title}`;
+    rename.setAttribute('aria-label', rename.title);
+    rename.addEventListener('click', () => editTitle(conversation, title));
+    const archive = document.createElement('button');
+    archive.type = 'button';
+    archive.className = 'conversation-action';
+    archive.innerHTML = archiveIcon;
+    archive.title = `归档：${conversation.title}`;
+    archive.setAttribute('aria-label', archive.title);
+    archive.addEventListener('click', async () => {
+      try {
+        const response = await fetch(`/api/conversations/${conversation.id}/archive`, { method: 'PATCH' });
+        if (!response.ok) throw new Error('归档失败');
+        if (activeId === conversation.id) startConversation();
+        await refreshHistory();
+      } catch {
+        addMessage('notice', '归档失败，请稍后重试。');
+      }
+    });
+    row.append(title, rename, archive);
+    historyList.append(row);
   }
+}
+
+function editTitle(conversation, titleButton) {
+  const input = document.createElement('input');
+  input.className = 'title-edit';
+  input.maxLength = 50;
+  input.value = conversation.title;
+  titleButton.replaceWith(input);
+  input.focus();
+  input.select();
+  const cancel = () => { if (input.isConnected) input.replaceWith(titleButton); };
+  input.addEventListener('keydown', async (event) => {
+    if (event.key === 'Escape') { cancel(); return; }
+    if (event.key !== 'Enter') return;
+    const title = input.value.trim();
+    if (!title || title.length > 50) { input.setCustomValidity('标题长度必须为 1 到 50 个字符'); input.reportValidity(); return; }
+    if (title === conversation.title) { cancel(); return; }
+    const response = await fetch(`/api/conversations/${conversation.id}/title`, {
+      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title })
+    });
+    if (!response.ok) { input.setCustomValidity('保存失败，请重试'); input.reportValidity(); return; }
+    await refreshHistory();
+    if (historyDialog.open) searchHistory().catch(() => {});
+  });
+  input.addEventListener('blur', cancel);
 }
 
 async function refreshHistory() {
@@ -28,6 +87,62 @@ async function refreshHistory() {
   if (!response.ok) throw new Error('无法读取对话列表');
   conversations = await response.json();
   renderHistory();
+}
+
+async function searchHistory() {
+  const request = ++historyRequest;
+  const params = new URLSearchParams({ archived: historyFilter.value, query: historySearch.value.trim() });
+  const response = await fetch(`/api/conversations?${params}`);
+  if (!response.ok) throw new Error('无法查询历史对话');
+  const results = await response.json();
+  if (request !== historyRequest || !historyDialog.open) return;
+  historyResults.replaceChildren();
+  for (const conversation of results) {
+    const row = document.createElement('div');
+    row.className = 'history-row';
+    const title = document.createElement('button');
+    title.type = 'button';
+    title.textContent = conversation.title;
+    title.addEventListener('click', () => {
+      historyDialog.close();
+      openConversation(conversation.id);
+    });
+    const date = document.createElement('time');
+    date.textContent = new Date(conversation.updatedAt).toLocaleString('zh-CN');
+    const rename = document.createElement('button');
+    rename.type = 'button';
+    rename.className = 'conversation-action';
+    rename.innerHTML = renameIcon;
+    rename.title = `重命名：${conversation.title}`;
+    rename.setAttribute('aria-label', rename.title);
+    rename.addEventListener('click', () => editTitle(conversation, title));
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.textContent = historyFilter.value === 'true' ? '恢复' : '归档';
+    action.addEventListener('click', async () => {
+      const archived = historyFilter.value !== 'true';
+      const response = await fetch(`/api/conversations/${conversation.id}/${archived ? 'archive' : 'restore'}`,
+        { method: 'PATCH' });
+      if (!response.ok) {
+        historyResults.textContent = '操作失败，请重试。';
+        return;
+      }
+      if (activeId === conversation.id) {
+        if (archived) startConversation();
+        else activeArchived = false;
+        updateComposerState();
+      }
+      await Promise.all([refreshHistory(), searchHistory()]);
+    });
+    row.append(title, date, rename, action);
+    historyResults.append(row);
+  }
+  if (!results.length) historyResults.textContent = '没有匹配的对话';
+}
+
+function updateComposerState() {
+  promptInput.disabled = activeArchived;
+  sendButton.disabled = activeArchived || isSending || !promptInput.value.trim();
 }
 
 function renderConversation(conversation) {
@@ -43,13 +158,18 @@ function renderConversation(conversation) {
 
 async function openConversation(id) {
   activeId = id;
+  activeArchived = false;
   const token = ++viewToken;
   renderHistory();
   try {
     const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
     if (!response.ok) throw new Error('无法读取对话');
     const conversation = await response.json();
-    if (token === viewToken) renderConversation(conversation);
+    if (token === viewToken) {
+      activeArchived = conversation.archived;
+      renderConversation(conversation);
+      updateComposerState();
+    }
   } catch {
     if (token === viewToken) startConversation();
   }
@@ -57,6 +177,8 @@ async function openConversation(id) {
 
 function startConversation() {
   activeId = null;
+  activeArchived = false;
+  updateComposerState();
   viewToken += 1;
   messages.replaceChildren();
   welcome.hidden = false;
@@ -157,7 +279,7 @@ function addRecommendations(questions) {
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = promptInput.value.trim();
-  if (!text || isSending) return;
+  if (!text || isSending || activeArchived) return;
 
   const requestedConversationId = activeId;
   const token = viewToken;
@@ -193,7 +315,10 @@ form.addEventListener('submit', async (event) => {
         const name = frame.split('\n').find(line => line.startsWith('event:'))?.slice(6).trim();
         const data = frame.split('\n').filter(line => line.startsWith('data:'))
           .map(line => line.slice(5)).join('\n');
-        if (name === 'conversation' && token === viewToken) activeId = data;
+        if (name === 'conversation' && token === viewToken) {
+          activeId = data;
+          updateComposerState();
+        }
         if (name === 'thinking' && token === viewToken) {
           if (!searchStatus) searchStatus = addMessage('notice', data);
           else searchStatus.textContent = data;
@@ -233,12 +358,12 @@ form.addEventListener('submit', async (event) => {
     if (token === viewToken) addMessage('notice', error.message || '无法连接萌芽服务，请稍后重试。');
   } finally {
     isSending = false;
-    sendButton.disabled = promptInput.value.trim().length === 0;
+    sendButton.disabled = activeArchived || promptInput.value.trim().length === 0;
   }
 });
 
 promptInput.addEventListener('input', () => {
-  sendButton.disabled = isSending || promptInput.value.trim().length === 0;
+  sendButton.disabled = activeArchived || isSending || promptInput.value.trim().length === 0;
   promptInput.style.height = 'auto';
   promptInput.style.height = `${Math.min(promptInput.scrollHeight, 150)}px`;
 });
@@ -251,7 +376,22 @@ promptInput.addEventListener('keydown', (event) => {
 });
 
 document.querySelector('#new-chat').addEventListener('click', startConversation);
+document.querySelector('#mobile-history').addEventListener('click', () => {
+  historyDialog.showModal();
+  searchHistory().catch(() => { historyResults.textContent = '无法查询历史对话'; });
+});
 document.querySelector('#mobile-new-chat').addEventListener('click', startConversation);
+document.querySelector('#history-open').addEventListener('click', () => {
+  historyDialog.showModal();
+  searchHistory().catch(() => { historyResults.textContent = '无法查询历史对话'; });
+});
+document.querySelector('#history-close').addEventListener('click', () => historyDialog.close());
+historySearch.addEventListener('input', () => {
+  searchHistory().catch(() => { historyResults.textContent = '无法查询历史对话'; });
+});
+historyFilter.addEventListener('change', () => {
+  searchHistory().catch(() => { historyResults.textContent = '无法查询历史对话'; });
+});
 document.querySelector('#clear-chat').addEventListener('click', async () => {
   if (!activeId) return;
   const id = activeId;

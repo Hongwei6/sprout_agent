@@ -12,6 +12,7 @@ public class ConversationEntity {
     private String title;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+    private Boolean archived;
 
     public String getId() {
         return id;
@@ -43,5 +44,13 @@ public class ConversationEntity {
 
     public void setUpdatedAt(LocalDateTime updatedAt) {
         this.updatedAt = updatedAt;
+    }
+
+    public Boolean getArchived() {
+        return archived;
+    }
+
+    public void setArchived(Boolean archived) {
+        this.archived = archived;
     }
 }

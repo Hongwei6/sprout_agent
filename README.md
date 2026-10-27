@@ -33,7 +33,12 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 - `GET /api/conversations/{id}`：对话及消息；每条助手消息包含 `references` 来源数组和 `recommendations` 推荐问题数组（没有时为空数组）。
 - `DELETE /api/conversations/{id}`：删除对话
 - `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 依次发送 `conversation`、`delta`（答案片段）、可选的 `reference`（来源）、可选的 `recommend`（推荐问题）和 `done`；工具状态通过 `thinking` 推送，异常发送 `error`。`recommend` 的 `data` 如 `{"type":"recommend","content":["下一步怎么做？","还有什么限制？","有哪些例子？"]}`。推荐生成失败时跳过该事件，仍保存答案并完成对话。
+- `GET /api/conversations?archived=true&query=关键词`：按状态与标题筛选最近 50 条，按 `updatedAt` 倒序；省略参数时仅返回未归档对话。
+- `PATCH /api/conversations/{id}/archive`、`PATCH /api/conversations/{id}/restore`：归档与恢复，均返回 204。
+- `PATCH /api/conversations/{id}/title`：请求 `{"title":"新标题"}`，去除首尾空格后须为 1–50 字符；重命名不改变最新消息时间。
 前端对流式回答及历史回答统一渲染 Markdown，渲染后的 HTML 经 DOMPurify 清理；用户输入仍按纯文本展示。Markdown 解析器和清理器从固定版本的 jsDelivr 加载，无法加载时回答退回纯文本。参考来源默认折叠，展开后鼠标悬停或键盘聚焦链接可预览摘要，点击链接在新标签页打开有效 HTTP(S) 来源。
+侧边栏只显示最近 50 条未归档对话，按最新消息时间倒序排列。每条标题右侧依次为重命名和归档按钮；输入新标题后按 Enter 保存、Esc 取消。历史对话窗口（移动端顶部历史按钮）也支持重命名、按标题搜索、归档和恢复。归档不删除消息，不改变最后消息时间；归档状态下不能继续发送，需先恢复。
+
 
 
 聊天使用流式 ReAct 轮次：识别工具调用、合并同一调用的参数分片、并发执行 Tavily MCP 工具，并将工具结果（包括失败信息）回填当前上下文供下一轮推理；开始执行时推送 `thinking` 状态。无工具调用即结束；超过 `sprout.agent.max-rounds` 后不再提供工具，强制生成最终回答。默认最多 5 轮；设置为 0 表示不限制轮次。`sprout.agent.max-messages` 控制每次注入模型的历史消息数，必须为至少 2 的偶数；Nacos YAML 配置为 20（至多最近 10 轮完整问答），只限制推理窗口，不删除 MySQL 的完整历史。

@@ -2,9 +2,11 @@ package com.sprout.agent.service;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertInstanceOf;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.verify;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprout.agent.dto.SearchResult;
@@ -14,6 +16,7 @@ import com.sprout.agent.mapper.ChatMessageMapper;
 import com.sprout.agent.mapper.ChatTurnDetailMapper;
 import com.sprout.agent.mapper.ConversationMapper;
 import java.util.ArrayList;
+import java.time.LocalDateTime;
 import java.util.Collections;
 import java.util.List;
 import org.junit.jupiter.api.Test;
@@ -21,6 +24,8 @@ import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 class ConversationServiceTest {
 
@@ -117,6 +122,47 @@ class ConversationServiceTest {
         assertEquals(List.of(new SearchResult("https://example.org/legacy", "https://example.org/legacy", "")),
                 history.get(2).references());
         assertEquals(List.of(), history.get(2).recommendations());
+    }
+
+    @Test
+    void archivedConversationCannotContinueAndRestoringKeepsLastMessageTime() {
+        ConversationMapper conversations = mock(ConversationMapper.class);
+        ChatMessageMapper messages = mock(ChatMessageMapper.class);
+        ChatTurnDetailMapper details = mock(ChatTurnDetailMapper.class);
+        ConversationEntity conversation = new ConversationEntity();
+        conversation.setId("session");
+        LocalDateTime lastMessage = LocalDateTime.of(2025, 1, 1, 12, 0);
+        conversation.setUpdatedAt(lastMessage);
+        when(conversations.selectById("session")).thenReturn(conversation);
+        ConversationService service = new ConversationService(conversations, messages, details, new ObjectMapper());
+
+        service.setArchived("session", true);
+        assertEquals(true, conversation.getArchived());
+        ResponseStatusException error = assertThrows(ResponseStatusException.class,
+                () -> service.createConversation("session", "继续"));
+        assertEquals(HttpStatus.CONFLICT, error.getStatusCode());
+        service.setArchived("session", false);
+        assertEquals(false, conversation.getArchived());
+        assertEquals(lastMessage, conversation.getUpdatedAt());
+        verify(conversations, org.mockito.Mockito.times(2)).updateById(conversation);
+    }
+
+    @Test
+    void renamingKeepsLastMessageTimeAndRejectsBlankTitles() {
+        ConversationMapper conversations = mock(ConversationMapper.class);
+        ConversationEntity conversation = new ConversationEntity();
+        conversation.setId("session");
+        conversation.setUpdatedAt(LocalDateTime.of(2025, 1, 1, 12, 0));
+        when(conversations.selectById("session")).thenReturn(conversation);
+        ConversationService service = new ConversationService(conversations, mock(ChatMessageMapper.class),
+                mock(ChatTurnDetailMapper.class), new ObjectMapper());
+
+        service.renameConversation("session", "  新名字  ");
+        assertEquals("新名字", conversation.getTitle());
+        assertEquals(LocalDateTime.of(2025, 1, 1, 12, 0), conversation.getUpdatedAt());
+        assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ResponseStatusException.class,
+                () -> service.renameConversation("session", "  ")).getStatusCode());
+        assertEquals("新名字", conversation.getTitle());
     }
 
     private static ConversationService.TurnResult result(String answer) {

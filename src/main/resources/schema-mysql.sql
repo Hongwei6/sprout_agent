@@ -3,6 +3,7 @@ CREATE TABLE IF NOT EXISTS conversations (
     title VARCHAR(50) NOT NULL,
     created_at DATETIME(6) NOT NULL,
     updated_at DATETIME(6) NOT NULL,
+    archived BOOLEAN NOT NULL DEFAULT FALSE,
     PRIMARY KEY (id),
     INDEX idx_conversations_updated_at (updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

@@ -61,14 +61,23 @@ public class DatabaseConfiguration {
                 .build();
     }
     @Bean
-    ApplicationRunner migrateRecommendations(@Qualifier("mysqlDataSource") DataSource dataSource) {
+    ApplicationRunner migrateConversationColumns(@Qualifier("mysqlDataSource") DataSource dataSource) {
         return args -> {
-            try (var connection = dataSource.getConnection();
-                 var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
-                         "chat_turn_details", "recommendations_json")) {
-                if (!columns.next()) {
-                    try (var statement = connection.createStatement()) {
-                        statement.executeUpdate("ALTER TABLE chat_turn_details ADD COLUMN recommendations_json JSON NULL");
+            try (var connection = dataSource.getConnection()) {
+                try (var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
+                        "chat_turn_details", "recommendations_json")) {
+                    if (!columns.next()) {
+                        try (var statement = connection.createStatement()) {
+                            statement.executeUpdate("ALTER TABLE chat_turn_details ADD COLUMN recommendations_json JSON NULL");
+                        }
+                    }
+                }
+                try (var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
+                        "conversations", "archived")) {
+                    if (!columns.next()) {
+                        try (var statement = connection.createStatement()) {
+                            statement.executeUpdate("ALTER TABLE conversations ADD COLUMN archived BOOLEAN NOT NULL DEFAULT FALSE");
+                        }
                     }
                 }
             }
