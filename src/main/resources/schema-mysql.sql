@@ -18,3 +18,15 @@ CREATE TABLE IF NOT EXISTS chat_messages (
     CONSTRAINT fk_chat_messages_conversation
         FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS chat_turn_details (
+    assistant_message_id BIGINT NOT NULL,
+    thinking MEDIUMTEXT NULL,
+    tools_json JSON NOT NULL,
+    references_json JSON NOT NULL,
+    first_response_ms BIGINT NULL,
+    total_response_ms BIGINT NOT NULL,
+    PRIMARY KEY (assistant_message_id),
+    CONSTRAINT fk_chat_turn_details_message
+        FOREIGN KEY (assistant_message_id) REFERENCES chat_messages (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

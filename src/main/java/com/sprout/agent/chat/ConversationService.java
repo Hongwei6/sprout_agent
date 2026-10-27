@@ -21,10 +21,13 @@ public class ConversationService {
 
     private final ConversationMapper conversationMapper;
     private final ChatMessageMapper messageMapper;
+    private final ChatTurnDetailMapper detailMapper;
 
-    public ConversationService(ConversationMapper conversationMapper, ChatMessageMapper messageMapper) {
+    public ConversationService(ConversationMapper conversationMapper, ChatMessageMapper messageMapper,
+            ChatTurnDetailMapper detailMapper) {
         this.conversationMapper = conversationMapper;
         this.messageMapper = messageMapper;
+        this.detailMapper = detailMapper;
     }
 
     @Transactional
@@ -45,11 +48,13 @@ public class ConversationService {
     }
 
     @Transactional
-    public void saveExchange(String conversationId, String question, String answer) {
+    public void saveExchange(String conversationId, String question, TurnResult result) {
         ConversationEntity conversation = requireConversation(conversationId);
         LocalDateTime now = LocalDateTime.now();
         insertMessage(conversationId, "user", question, now);
-        insertMessage(conversationId, "assistant", answer, now);
+        ChatMessageEntity answer = insertMessage(conversationId, "assistant", result.answer(), now);
+        detailMapper.insert(answer.getId(), result.thinking(), result.toolsJson(), result.referencesJson(),
+                result.firstResponseMs(), result.totalResponseMs());
         conversation.setUpdatedAt(now);
         conversationMapper.updateById(conversation);
     }
@@ -114,13 +119,18 @@ public class ConversationService {
         return conversation;
     }
 
-    private void insertMessage(String conversationId, String role, String content, LocalDateTime createdAt) {
+    private ChatMessageEntity insertMessage(String conversationId, String role, String content, LocalDateTime createdAt) {
         ChatMessageEntity message = new ChatMessageEntity();
         message.setConversationId(conversationId);
         message.setRole(role);
         message.setContent(content);
         message.setCreatedAt(createdAt);
         messageMapper.insert(message);
+        return message;
+    }
+
+    public record TurnResult(String answer, String thinking, String toolsJson, String referencesJson,
+            Long firstResponseMs, long totalResponseMs) {
     }
 
     public record ConversationSummary(String id, String title, LocalDateTime updatedAt) {

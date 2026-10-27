@@ -1,5 +1,7 @@
 package com.sprout.agent.chat;
 
+import com.fasterxml.jackson.core.JsonProcessingException;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
@@ -7,6 +9,7 @@ import jakarta.validation.constraints.Size;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
+import java.util.concurrent.TimeUnit;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -38,6 +41,7 @@ public class ChatController {
 
     private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
     private final ConversationService conversationService;
+    private final ObjectMapper objectMapper;
     private final ToolCallback[] tools;
     private final String apiKey;
     private final String model;
@@ -47,6 +51,7 @@ public class ChatController {
     public ChatController(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
             ConversationService conversationService,
+            ObjectMapper objectMapper,
             TavilySearchTool tavilySearchTool,
             @Value("${spring.ai.openai.api-key:}") String apiKey,
             @Value("${spring.ai.openai.chat.options.model:}") String model,
@@ -54,6 +59,7 @@ public class ChatController {
             @Value("${sprout.agent.max-messages:20}") int maxMessages) {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
+        this.objectMapper = objectMapper;
         this.tools = MethodToolCallbackProvider.builder().toolObjects(tavilySearchTool).build().getToolCallbacks();
         this.apiKey = apiKey;
         this.model = model;
@@ -76,26 +82,32 @@ public class ChatController {
             List<Message> messages = new ArrayList<>(memory.get(conversationId));
             messages.add(new UserMessage(request.message()));
             return Flux.just(event("conversation", conversationId))
-                    .concatWith(scheduleRound(builder.build(), messages, conversationId, request.message(), 1))
+                    .concatWith(scheduleRound(builder.build(), messages, conversationId, request.message(), new TurnState(), 1))
                     .onErrorResume(ex -> Flux.just(event("error", "对话生成失败，请稍后重试。")));
         }));
     }
 
     private Flux<ServerSentEvent<String>> scheduleRound(
-            ChatClient client, List<Message> messages, String conversationId, String question, int round) {
+            ChatClient client, List<Message> messages, String conversationId, String question, TurnState turn, int round) {
         RoundState state = new RoundState();
         return client.prompt().messages(messages)
                 .options(OpenAiChatOptions.builder().internalToolExecutionEnabled(false).build())
                 .toolCallbacks(tools)
                 .stream().chatResponse()
-                .concatMap(chunk -> processChunk(chunk, state))
-                .concatWith(Flux.defer(() -> finishRound(client, messages, conversationId, question, round, state))
+                .concatMap(chunk -> processChunk(chunk, state, turn))
+                .concatWith(Flux.defer(() -> finishRound(client, messages, conversationId, question, turn, round, state))
                         .subscribeOn(Schedulers.boundedElastic()));
     }
 
-    private Flux<ServerSentEvent<String>> processChunk(ChatResponse chunk, RoundState state) {
+    private Flux<ServerSentEvent<String>> processChunk(ChatResponse chunk, RoundState state, TurnState turn) {
         if (chunk.getResult() == null || chunk.getResult().getOutput() == null) return Flux.empty();
         AssistantMessage output = chunk.getResult().getOutput();
+        Object reasoning = output.getMetadata().get("reasoningContent");
+        if (reasoning instanceof String text && !text.isEmpty()) turn.thinking.append(text);
+        if (output.hasToolCalls() || (output.getText() != null && !output.getText().isEmpty())
+                || (reasoning instanceof String text && !text.isEmpty())) {
+            turn.markFirstResponse();
+        }
         if (output.hasToolCalls()) {
             state.toolMode = true;
             for (AssistantMessage.ToolCall call : output.getToolCalls()) mergeToolCall(state, call);
@@ -121,13 +133,14 @@ public class ChatController {
     }
 
     private Flux<ServerSentEvent<String>> finishRound(
-            ChatClient client, List<Message> messages, String conversationId, String question, int round, RoundState state) {
+            ChatClient client, List<Message> messages, String conversationId, String question,
+            TurnState turn, int round, RoundState state) {
         if (!state.toolMode) {
-            conversationService.saveExchange(conversationId, question, state.text.toString());
+            saveResult(conversationId, question, state.text.toString(), turn);
             return Flux.just(event("done", ""));
         }
         if (maxRounds > 0 && round >= maxRounds) {
-            return forceFinalStream(client, messages, conversationId, question);
+            return forceFinalStream(client, messages, conversationId, question, turn);
         }
         messages.add(AssistantMessage.builder().content(state.text.toString()).toolCalls(state.toolCalls).build());
         List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>(state.toolCalls.size());
@@ -145,28 +158,46 @@ public class ChatController {
             } else {
                 try {
                     result = callback.call(call.arguments());
+                    if ("searchWeb".equals(call.name())) {
+                        turn.references.addAll(extractSourceLinks(result, objectMapper));
+                    }
                 } catch (Exception ex) {
                     result = "工具执行失败：" + ex.getClass().getSimpleName();
                 }
             }
+            turn.tools.add(new ToolExecution(call.name(), Objects.toString(call.arguments(), ""), result));
             responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), result));
         }
         messages.add(ToolResponseMessage.builder().responses(responses).build());
-        return scheduleRound(client, messages, conversationId, question, round + 1);
+        return scheduleRound(client, messages, conversationId, question, turn, round + 1);
+    }
+
+    static List<String> extractSourceLinks(String result, ObjectMapper mapper) throws JsonProcessingException {
+        String source = result.startsWith("\"") ? mapper.readTree(result).asText() : result;
+        return source.lines().filter(line -> line.startsWith("https://") || line.startsWith("http://")).toList();
     }
 
     private Flux<ServerSentEvent<String>> forceFinalStream(
-            ChatClient client, List<Message> messages, String conversationId, String question) {
-        StringBuilder answer = new StringBuilder();
+            ChatClient client, List<Message> messages, String conversationId, String question, TurnState turn) {
+        RoundState state = new RoundState();
         List<Message> finalMessages = new ArrayList<>(messages);
         finalMessages.add(new UserMessage("请基于已有信息直接回答，不再调用工具。"));
-        return client.prompt().messages(finalMessages).stream().content()
-                .doOnNext(answer::append)
-                .map(text -> event("delta", text))
+        return client.prompt().messages(finalMessages).stream().chatResponse()
+                .concatMap(chunk -> processChunk(chunk, state, turn))
                 .concatWith(Flux.defer(() -> {
-                    conversationService.saveExchange(conversationId, question, answer.toString());
+                    saveResult(conversationId, question, state.text.toString(), turn);
                     return Flux.just(event("done", ""));
                 }));
+    }
+
+    private void saveResult(String conversationId, String question, String answer, TurnState turn) {
+        Long firstResponseMs = turn.firstResponseNanos == 0 ? null
+                : TimeUnit.NANOSECONDS.toMillis(turn.firstResponseNanos - turn.startedNanos);
+        conversationService.saveExchange(conversationId, question, new ConversationService.TurnResult(
+                answer, turn.thinking.isEmpty() ? null : turn.thinking.toString(),
+                objectMapper.valueToTree(turn.tools).toString(),
+                objectMapper.valueToTree(turn.references).toString(),
+                firstResponseMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
     }
 
     private static ServerSentEvent<String> event(String name, String data) {
@@ -177,6 +208,21 @@ public class ChatController {
         final List<AssistantMessage.ToolCall> toolCalls = new ArrayList<>();
         final StringBuilder text = new StringBuilder();
         boolean toolMode;
+    }
+
+    private static class TurnState {
+        final long startedNanos = System.nanoTime();
+        final StringBuilder thinking = new StringBuilder();
+        final List<ToolExecution> tools = new ArrayList<>();
+        final List<String> references = new ArrayList<>();
+        long firstResponseNanos;
+
+        void markFirstResponse() {
+            if (firstResponseNanos == 0) firstResponseNanos = System.nanoTime();
+        }
+    }
+
+    private record ToolExecution(String name, String arguments, String result) {
     }
 
     public record ChatRequest(
