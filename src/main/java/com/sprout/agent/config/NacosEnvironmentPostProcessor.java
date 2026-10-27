@@ -43,7 +43,8 @@ public class NacosEnvironmentPostProcessor implements EnvironmentPostProcessor, 
         String password = required(environment, "NACOS_PASSWORD");
         String dataId = environment.getProperty("NACOS_DATA_ID", "sprout-agent-zerotier.yaml");
         String group = environment.getProperty("NACOS_GROUP", "DEFAULT_GROUP");
-        String namespace = environment.getProperty("NACOS_NAMESPACE", "");
+        String namespace = environment.getProperty(
+                "NACOS_NAMESPACE", environment.getProperty("sprout.nacos.namespace", "sprout_agent"));
 
         try {
             HttpClient client = HttpClient.newBuilder().connectTimeout(REQUEST_TIMEOUT).build();

@@ -1,3 +1,7 @@
 spring:
   application:
     name: sprout-agent
+
+sprout:
+  nacos:
+    namespace: sprout_agent
