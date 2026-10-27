@@ -8,6 +8,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import org.springframework.ai.chat.client.ChatClient;
+import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
@@ -41,6 +42,7 @@ public class ChatController {
     private final String apiKey;
     private final String model;
     private final int maxRounds;
+    private final int maxMessages;
 
     public ChatController(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
@@ -48,13 +50,18 @@ public class ChatController {
             TavilySearchTool tavilySearchTool,
             @Value("${spring.ai.openai.api-key:}") String apiKey,
             @Value("${spring.ai.openai.chat.options.model:}") String model,
-            @Value("${sprout.agent.max-rounds:5}") int maxRounds) {
+            @Value("${sprout.agent.max-rounds:5}") int maxRounds,
+            @Value("${sprout.agent.max-messages:20}") int maxMessages) {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
         this.tools = MethodToolCallbackProvider.builder().toolObjects(tavilySearchTool).build().getToolCallbacks();
         this.apiKey = apiKey;
         this.model = model;
         this.maxRounds = maxRounds;
+        if (maxMessages < 2 || maxMessages % 2 != 0) {
+            throw new IllegalArgumentException("sprout.agent.max-messages must be a positive even number");
+        }
+        this.maxMessages = maxMessages;
     }
 
     @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
@@ -64,27 +71,25 @@ public class ChatController {
             return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
         }
         return ResponseEntity.ok(Flux.defer(() -> {
-            String conversationId = conversationService.saveUserMessage(request.conversationId(), request.message());
-            List<Message> messages = new ArrayList<>(conversationService.recentPromptMessages(conversationId).stream()
-                    .map(message -> (Message) ("user".equals(message.role())
-                            ? new UserMessage(message.text())
-                            : new AssistantMessage(message.text())))
-                    .toList());
+            String conversationId = conversationService.createConversation(request.conversationId(), request.message());
+            ChatMemory memory = conversationService.createPersistentChatMemory(conversationId, maxMessages);
+            List<Message> messages = new ArrayList<>(memory.get(conversationId));
+            messages.add(new UserMessage(request.message()));
             return Flux.just(event("conversation", conversationId))
-                    .concatWith(scheduleRound(builder.build(), messages, conversationId, 1))
+                    .concatWith(scheduleRound(builder.build(), messages, conversationId, request.message(), 1))
                     .onErrorResume(ex -> Flux.just(event("error", "对话生成失败，请稍后重试。")));
         }));
     }
 
     private Flux<ServerSentEvent<String>> scheduleRound(
-            ChatClient client, List<Message> messages, String conversationId, int round) {
+            ChatClient client, List<Message> messages, String conversationId, String question, int round) {
         RoundState state = new RoundState();
         return client.prompt().messages(messages)
                 .options(OpenAiChatOptions.builder().internalToolExecutionEnabled(false).build())
                 .toolCallbacks(tools)
                 .stream().chatResponse()
                 .concatMap(chunk -> processChunk(chunk, state))
-                .concatWith(Flux.defer(() -> finishRound(client, messages, conversationId, round, state))
+                .concatWith(Flux.defer(() -> finishRound(client, messages, conversationId, question, round, state))
                         .subscribeOn(Schedulers.boundedElastic()));
     }
 
@@ -116,13 +121,13 @@ public class ChatController {
     }
 
     private Flux<ServerSentEvent<String>> finishRound(
-            ChatClient client, List<Message> messages, String conversationId, int round, RoundState state) {
+            ChatClient client, List<Message> messages, String conversationId, String question, int round, RoundState state) {
         if (!state.toolMode) {
-            conversationService.saveAssistantMessage(conversationId, state.text.toString());
+            conversationService.saveExchange(conversationId, question, state.text.toString());
             return Flux.just(event("done", ""));
         }
         if (maxRounds > 0 && round >= maxRounds) {
-            return forceFinalStream(client, messages, conversationId);
+            return forceFinalStream(client, messages, conversationId, question);
         }
         messages.add(AssistantMessage.builder().content(state.text.toString()).toolCalls(state.toolCalls).build());
         List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>(state.toolCalls.size());
@@ -147,11 +152,11 @@ public class ChatController {
             responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), result));
         }
         messages.add(ToolResponseMessage.builder().responses(responses).build());
-        return scheduleRound(client, messages, conversationId, round + 1);
+        return scheduleRound(client, messages, conversationId, question, round + 1);
     }
 
     private Flux<ServerSentEvent<String>> forceFinalStream(
-            ChatClient client, List<Message> messages, String conversationId) {
+            ChatClient client, List<Message> messages, String conversationId, String question) {
         StringBuilder answer = new StringBuilder();
         List<Message> finalMessages = new ArrayList<>(messages);
         finalMessages.add(new UserMessage("请基于已有信息直接回答，不再调用工具。"));
@@ -159,7 +164,7 @@ public class ChatController {
                 .doOnNext(answer::append)
                 .map(text -> event("delta", text))
                 .concatWith(Flux.defer(() -> {
-                    conversationService.saveAssistantMessage(conversationId, answer.toString());
+                    conversationService.saveExchange(conversationId, question, answer.toString());
                     return Flux.just(event("done", ""));
                 }));
     }

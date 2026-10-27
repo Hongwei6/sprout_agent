@@ -2,10 +2,12 @@ package com.sprout.agent.chat;
 
 import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.ai.chat.memory.ChatMemory;
+import org.springframework.ai.chat.memory.MessageWindowChatMemory;
+import org.springframework.ai.chat.messages.AssistantMessage;
+import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -26,30 +28,28 @@ public class ConversationService {
     }
 
     @Transactional
-    public String saveUserMessage(String conversationId, String content) {
+    public String createConversation(String conversationId, String question) {
         LocalDateTime now = LocalDateTime.now();
         ConversationEntity conversation;
         if (conversationId == null) {
             conversation = new ConversationEntity();
             conversation.setId(UUID.randomUUID().toString().replace("-", ""));
-            conversation.setTitle(content.substring(0, Math.min(content.length(), TITLE_LENGTH)));
+            conversation.setTitle(question.substring(0, Math.min(question.length(), TITLE_LENGTH)));
             conversation.setCreatedAt(now);
             conversation.setUpdatedAt(now);
             conversationMapper.insert(conversation);
         } else {
             conversation = requireConversation(conversationId);
-            conversation.setUpdatedAt(now);
-            conversationMapper.updateById(conversation);
         }
-        insertMessage(conversation.getId(), "user", content, now);
         return conversation.getId();
     }
 
     @Transactional
-    public void saveAssistantMessage(String conversationId, String content) {
+    public void saveExchange(String conversationId, String question, String answer) {
         ConversationEntity conversation = requireConversation(conversationId);
         LocalDateTime now = LocalDateTime.now();
-        insertMessage(conversationId, "assistant", content, now);
+        insertMessage(conversationId, "user", question, now);
+        insertMessage(conversationId, "assistant", answer, now);
         conversation.setUpdatedAt(now);
         conversationMapper.updateById(conversation);
     }
@@ -64,17 +64,27 @@ public class ConversationService {
                 .toList();
     }
 
-    public List<MessageView> recentPromptMessages(String conversationId) {
+    public ChatMemory createPersistentChatMemory(String conversationId, int maxMessages) {
+        if (maxMessages < 2 || maxMessages % 2 != 0) {
+            throw new IllegalArgumentException("maxMessages must be a positive even number");
+        }
         requireConversation(conversationId);
-        List<MessageView> recent = new ArrayList<>(messageMapper.selectList(new LambdaQueryWrapper<ChatMessageEntity>()
-                        .eq(ChatMessageEntity::getConversationId, conversationId)
-                        .orderByDesc(ChatMessageEntity::getId)
-                        .last("LIMIT 20"))
-                .stream()
-                .map(message -> new MessageView(message.getRole(), message.getContent()))
-                .toList());
-        Collections.reverse(recent);
-        return recent;
+        ChatMemory memory = MessageWindowChatMemory.builder().maxMessages(maxMessages).build();
+        List<ChatMessageEntity> recent = messageMapper.selectList(new LambdaQueryWrapper<ChatMessageEntity>()
+                .eq(ChatMessageEntity::getConversationId, conversationId)
+                .orderByDesc(ChatMessageEntity::getId)
+                .last("LIMIT " + maxMessages));
+        UserMessage question = null;
+        for (int i = recent.size() - 1; i >= 0; i--) {
+            ChatMessageEntity message = recent.get(i);
+            if ("user".equals(message.getRole())) {
+                question = new UserMessage(message.getContent());
+            } else if ("assistant".equals(message.getRole()) && question != null) {
+                memory.add(conversationId, List.of(question, new AssistantMessage(message.getContent())));
+                question = null;
+            }
+        }
+        return memory;
     }
 
     public ConversationDetail getConversation(String id) {
