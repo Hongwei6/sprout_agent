@@ -68,7 +68,7 @@ public class ConversationService {
         insertMessage(conversationId, "user", question, now);
         ChatMessageEntity answer = insertMessage(conversationId, "assistant", result.answer(), now);
         detailMapper.insert(answer.getId(), result.thinking(), result.toolsJson(), result.referencesJson(),
-                result.firstResponseMs(), result.totalResponseMs());
+                result.recommendationsJson(), result.firstResponseMs(), result.totalResponseMs());
         conversation.setUpdatedAt(now);
         conversationMapper.updateById(conversation);
     }
@@ -111,13 +111,17 @@ public class ConversationService {
         List<ChatMessageEntity> rows = messageMapper.selectList(new LambdaQueryWrapper<ChatMessageEntity>()
                 .eq(ChatMessageEntity::getConversationId, id)
                 .orderByAsc(ChatMessageEntity::getId));
-        Map<Long, List<SearchResult>> references = new HashMap<>();
+        Map<Long, ChatTurnDetailMapper.ReferenceRow> details = new HashMap<>();
         for (ChatTurnDetailMapper.ReferenceRow row : detailMapper.findReferences(id)) {
-            references.put(row.assistantMessageId(), readReferences(row.referencesJson()));
+            details.put(row.assistantMessageId(), row);
         }
         List<MessageView> messages = rows.stream()
-                .map(message -> new MessageView(message.getRole(), message.getContent(),
-                        references.getOrDefault(message.getId(), List.of())))
+                .map(message -> {
+                    ChatTurnDetailMapper.ReferenceRow detail = details.get(message.getId());
+                    return new MessageView(message.getRole(), message.getContent(),
+                            detail == null ? List.of() : readReferences(detail.referencesJson()),
+                            detail == null ? List.of() : readRecommendations(detail.recommendationsJson()));
+                })
                 .toList();
         return new ConversationDetail(conversation.getId(), conversation.getTitle(), messages);
     }
@@ -137,6 +141,15 @@ public class ConversationService {
             throw new IllegalStateException("Invalid stored conversation references", ex);
         }
     }
+    private List<String> readRecommendations(String json) {
+        if (json == null) return List.of();
+        try {
+            return objectMapper.readValue(json, new com.fasterxml.jackson.core.type.TypeReference<List<String>>() {});
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Invalid stored recommendations", ex);
+        }
+    }
+
 
     @Transactional
     public void deleteConversation(String id) {
@@ -165,13 +178,13 @@ public class ConversationService {
     }
 
     public record TurnResult(String answer, String thinking, String toolsJson, String referencesJson,
-            Long firstResponseMs, long totalResponseMs) {
+            String recommendationsJson, Long firstResponseMs, long totalResponseMs) {
     }
 
     public record ConversationSummary(String id, String title, LocalDateTime updatedAt) {
     }
 
-    public record MessageView(String role, String text, List<SearchResult> references) {
+    public record MessageView(String role, String text, List<SearchResult> references, List<String> recommendations) {
     }
 
     public record ConversationDetail(String id, String title, List<MessageView> messages) {

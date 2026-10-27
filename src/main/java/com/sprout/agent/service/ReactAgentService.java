@@ -3,7 +3,9 @@ package com.sprout.agent.service;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.sprout.agent.dto.SearchResult;
+import com.sprout.agent.prompts.ReactAgentPrompts;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -14,6 +16,7 @@ import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.memory.ChatMemory;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.SystemMessage;
 import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
 import org.springframework.ai.chat.model.ChatResponse;
@@ -40,6 +43,7 @@ public class ReactAgentService {
     private final String model;
     private final int maxRounds;
     private final int maxMessages;
+    private final boolean enableRecommendations;
 
     public ReactAgentService(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
@@ -49,7 +53,8 @@ public class ReactAgentService {
             @Value("${spring.ai.openai.api-key:}") String apiKey,
             @Value("${spring.ai.openai.chat.options.model:}") String model,
             @Value("${sprout.agent.max-rounds:5}") int maxRounds,
-            @Value("${sprout.agent.max-messages:20}") int maxMessages) {
+            @Value("${sprout.agent.max-messages:20}") int maxMessages,
+            @Value("${sprout.agent.enable-recommendations:true}") boolean enableRecommendations) {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
         this.objectMapper = objectMapper;
@@ -61,6 +66,7 @@ public class ReactAgentService {
             throw new IllegalArgumentException("sprout.agent.max-messages must be a positive even number");
         }
         this.maxMessages = maxMessages;
+        this.enableRecommendations = enableRecommendations;
     }
 
     public boolean isAvailable() {
@@ -74,6 +80,7 @@ public class ReactAgentService {
             String conversationId = conversationService.createConversation(requestedConversationId, question);
             ChatMemory memory = conversationService.createPersistentChatMemory(conversationId, maxMessages);
             List<Message> messages = new ArrayList<>(memory.get(conversationId));
+            messages.add(0, new SystemMessage(ReactAgentPrompts.getWebSearchPrompt()));
             messages.add(new UserMessage(question));
             return Flux.just(event("conversation", conversationId))
                     .concatWith(scheduleRound(builder.build(), messages, conversationId, question, new TurnState(), 1))
@@ -234,17 +241,48 @@ public class ReactAgentService {
 
     private Flux<ChatEvent> finishAnswer(String conversationId, String question, String answer, TurnState turn) {
         String referencesJson = objectMapper.valueToTree(turn.searchResults.values()).toString();
+        String recommendationsJson = generateRecommendations(conversationId, question, answer);
         Long firstResponseMs = turn.firstResponseNanos == 0 ? null
                 : TimeUnit.NANOSECONDS.toMillis(turn.firstResponseNanos - turn.startedNanos);
         conversationService.saveExchange(conversationId, question, new ConversationService.TurnResult(
                 answer, turn.thinking.isEmpty() ? null : turn.thinking.toString(),
-                objectMapper.valueToTree(turn.tools).toString(), referencesJson,
+                objectMapper.valueToTree(turn.tools).toString(), referencesJson, recommendationsJson,
                 firstResponseMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
-        if (turn.searchResults.isEmpty()) return Flux.just(event("done", ""));
-        String payload = objectMapper.valueToTree(
-                new ReferenceResponse("reference", referencesJson, turn.searchResults.size())).toString();
-        return Flux.just(event("reference", payload), event("done", ""));
+        List<ChatEvent> events = new ArrayList<>(3);
+        if (!turn.searchResults.isEmpty()) {
+            events.add(event("reference", objectMapper.valueToTree(
+                    new ReferenceResponse("reference", referencesJson, turn.searchResults.size())).toString()));
+        }
+        if (recommendationsJson != null) {
+            events.add(event("recommend", "{\"type\":\"recommend\",\"content\":" + recommendationsJson + "}"));
+        }
+        events.add(event("done", ""));
+        return Flux.fromIterable(events);
     }
+
+    private String generateRecommendations(String conversationId, String question, String answer) {
+        if (!enableRecommendations || answer.isBlank()) return null;
+        try {
+            List<Message> context = new ArrayList<>(conversationService
+                    .createPersistentChatMemory(conversationId, maxMessages).get(conversationId));
+            context.add(0, new SystemMessage(ReactAgentPrompts.getRecommendPrompt()));
+            context.add(new UserMessage(question));
+            context.add(new AssistantMessage(answer));
+            context.add(new UserMessage("请生成恰好3个后续问题，仅输出 JSON 字符串数组，不要 Markdown 或解释。"));
+            String result = chatClientBuilder.getObject().build().prompt().messages(context).call().content();
+            List<String> questions = parseRecommendations(result);
+            return questions.size() == 3 && questions.stream().allMatch(s -> s != null && !s.isBlank())
+                    && questions.stream().distinct().count() == 3 ? objectMapper.writeValueAsString(questions) : null;
+        } catch (Exception ex) {
+            return null;
+        }
+    }
+
+    private List<String> parseRecommendations(String json) throws JsonProcessingException {
+        return objectMapper.readValue(json, new TypeReference<List<String>>() {});
+    }
+
+
 
     private record ReferenceResponse(String type, String content, int count) {
     }

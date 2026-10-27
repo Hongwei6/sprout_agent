@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS chat_turn_details (
     thinking MEDIUMTEXT NULL,
     tools_json JSON NOT NULL,
     references_json JSON NOT NULL,
+    recommendations_json JSON NULL,
     first_response_ms BIGINT NULL,
     total_response_ms BIGINT NOT NULL,
     PRIMARY KEY (assistant_message_id),

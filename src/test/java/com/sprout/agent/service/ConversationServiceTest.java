@@ -101,8 +101,9 @@ class ConversationServiceTest {
         when(messages.selectList(any())).thenReturn(List.of(question, answer, olderAnswer));
         when(details.findReferences("session")).thenReturn(List.of(
                 new ChatTurnDetailMapper.ReferenceRow(2L,
-                        "[{\"url\":\"https://docs.tavily.com\",\"title\":\"Tavily 文档\",\"content\":\"摘要\"}]"),
-                new ChatTurnDetailMapper.ReferenceRow(3L, "[\"https://example.org/legacy\"]")));
+                        "[{\"url\":\"https://docs.tavily.com\",\"title\":\"Tavily 文档\",\"content\":\"摘要\"}]",
+                        "[\"继续了解 Tavily？\",\"如何配置搜索？\",\"还有哪些案例？\"]"),
+                new ChatTurnDetailMapper.ReferenceRow(3L, "[\"https://example.org/legacy\"]", null)));
 
         List<ConversationService.MessageView> history =
                 new ConversationService(conversations, messages, details, new ObjectMapper())
@@ -111,12 +112,15 @@ class ConversationServiceTest {
         assertEquals(List.of(), history.get(0).references());
         assertEquals(List.of(new SearchResult("https://docs.tavily.com", "Tavily 文档", "摘要")),
                 history.get(1).references());
+        assertEquals(List.of("继续了解 Tavily？", "如何配置搜索？", "还有哪些案例？"),
+                history.get(1).recommendations());
         assertEquals(List.of(new SearchResult("https://example.org/legacy", "https://example.org/legacy", "")),
                 history.get(2).references());
+        assertEquals(List.of(), history.get(2).recommendations());
     }
 
     private static ConversationService.TurnResult result(String answer) {
-        return new ConversationService.TurnResult(answer, null, "[]", "[]", 10L, 20);
+        return new ConversationService.TurnResult(answer, null, "[]", "[]", null, 10L, 20);
     }
 
     private static ChatMessageEntity row(String role, String text) {

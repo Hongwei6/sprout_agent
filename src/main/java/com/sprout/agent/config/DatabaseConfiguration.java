@@ -10,6 +10,7 @@ import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.boot.jdbc.DataSourceBuilder;
 import org.springframework.context.annotation.Bean;
+import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -59,6 +60,21 @@ public class DatabaseConfiguration {
                 .initializeSchema(properties.initializeSchema())
                 .build();
     }
+    @Bean
+    ApplicationRunner migrateRecommendations(@Qualifier("mysqlDataSource") DataSource dataSource) {
+        return args -> {
+            try (var connection = dataSource.getConnection();
+                 var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
+                         "chat_turn_details", "recommendations_json")) {
+                if (!columns.next()) {
+                    try (var statement = connection.createStatement()) {
+                        statement.executeUpdate("ALTER TABLE chat_turn_details ADD COLUMN recommendations_json JSON NULL");
+                    }
+                }
+            }
+        };
+    }
+
 
     @ConfigurationProperties("sprout.pgvector")
     public record PgVectorProperties(

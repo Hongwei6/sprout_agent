@@ -36,6 +36,7 @@ function renderConversation(conversation) {
   for (const item of conversation.messages) {
     addMessage(item.role, item.text);
     if (item.role === 'assistant') addReferences(item.references);
+    if (item.role === 'assistant') addRecommendations(item.recommendations);
   }
   messages.scrollTop = messages.scrollHeight;
 }
@@ -106,6 +107,27 @@ function addReferences(references) {
   messages.append(section);
   section.scrollIntoView({ block: 'nearest' });
 }
+function addRecommendations(questions) {
+  if (!Array.isArray(questions) || !questions.length) return;
+  const section = document.createElement('section');
+  section.className = 'recommendations';
+  const title = document.createElement('strong');
+  title.textContent = '你还可以问';
+  section.append(title);
+  for (const question of questions) {
+    if (typeof question !== 'string' || !question.trim()) continue;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = question;
+    button.addEventListener('click', () => {
+      promptInput.value = question;
+      form.requestSubmit();
+    });
+    section.append(button);
+  }
+  if (section.childElementCount > 1) messages.append(section);
+}
+
 
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
@@ -164,6 +186,10 @@ form.addEventListener('submit', async (event) => {
             addReferences(typeof reference.content === 'string'
               ? JSON.parse(reference.content) : reference.content);
           }
+        }
+        if (name === 'recommend' && token === viewToken) {
+          const recommendation = JSON.parse(data);
+          if (recommendation.type === 'recommend') addRecommendations(recommendation.content);
         }
         if (name === 'error') throw new Error(data);
         if (name === 'done') {
