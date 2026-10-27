@@ -4,19 +4,30 @@ import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.Pattern;
 import jakarta.validation.constraints.Size;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Objects;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.chat.messages.Message;
+import org.springframework.ai.chat.messages.ToolResponseMessage;
 import org.springframework.ai.chat.messages.UserMessage;
+import org.springframework.ai.chat.model.ChatResponse;
+import org.springframework.ai.openai.OpenAiChatOptions;
+import org.springframework.ai.tool.ToolCallback;
+import org.springframework.ai.tool.method.MethodToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.codec.ServerSentEvent;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import reactor.core.publisher.Flux;
+import reactor.core.scheduler.Schedulers;
 
 @RestController
 @RequestMapping("/api/chat")
@@ -26,49 +37,145 @@ public class ChatController {
 
     private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
     private final ConversationService conversationService;
-    private final TavilySearchTool tavilySearchTool;
+    private final ToolCallback[] tools;
     private final String apiKey;
     private final String model;
+    private final int maxRounds;
 
     public ChatController(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
             ConversationService conversationService,
             TavilySearchTool tavilySearchTool,
             @Value("${spring.ai.openai.api-key:}") String apiKey,
-            @Value("${spring.ai.openai.chat.options.model:}") String model) {
+            @Value("${spring.ai.openai.chat.options.model:}") String model,
+            @Value("${sprout.agent.max-rounds:5}") int maxRounds) {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
-        this.tavilySearchTool = tavilySearchTool;
+        this.tools = MethodToolCallbackProvider.builder().toolObjects(tavilySearchTool).build().getToolCallbacks();
         this.apiKey = apiKey;
         this.model = model;
+        this.maxRounds = maxRounds;
     }
 
-    @PostMapping
-    public ResponseEntity<ChatResponse> chat(@Valid @RequestBody ChatRequest request) {
-        String conversationId = conversationService.saveUserMessage(request.conversationId(), request.message());
+    @PostMapping(produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public ResponseEntity<Flux<ServerSentEvent<String>>> chat(@Valid @RequestBody ChatRequest request) {
         ChatClient.Builder builder = chatClientBuilder.getIfAvailable();
         if (apiKey.isBlank() || LOCAL_API_KEY_PLACEHOLDER.equals(apiKey) || model.isBlank() || builder == null) {
-            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE)
-                    .body(new ChatResponse(conversationId, "DeepSeek 服务尚未配置，请检查模型凭证。"));
+            return ResponseEntity.status(HttpStatus.SERVICE_UNAVAILABLE).build();
         }
+        return ResponseEntity.ok(Flux.defer(() -> {
+            String conversationId = conversationService.saveUserMessage(request.conversationId(), request.message());
+            List<Message> messages = new ArrayList<>(conversationService.recentPromptMessages(conversationId).stream()
+                    .map(message -> (Message) ("user".equals(message.role())
+                            ? new UserMessage(message.text())
+                            : new AssistantMessage(message.text())))
+                    .toList());
+            return Flux.just(event("conversation", conversationId))
+                    .concatWith(scheduleRound(builder.build(), messages, conversationId, 1))
+                    .onErrorResume(ex -> Flux.just(event("error", "对话生成失败，请稍后重试。")));
+        }));
+    }
 
-        List<Message> promptMessages = conversationService.recentPromptMessages(conversationId).stream()
-                .map(message -> (Message) ("user".equals(message.role())
-                        ? new UserMessage(message.text())
-                        : new AssistantMessage(message.text())))
-                .toList();
-        String answer = builder.build().prompt().messages(promptMessages)
-                .tools(tavilySearchTool)
-                .call().content();
-        conversationService.saveAssistantMessage(conversationId, answer);
-        return ResponseEntity.ok(new ChatResponse(conversationId, answer));
+    private Flux<ServerSentEvent<String>> scheduleRound(
+            ChatClient client, List<Message> messages, String conversationId, int round) {
+        RoundState state = new RoundState();
+        return client.prompt().messages(messages)
+                .options(OpenAiChatOptions.builder().internalToolExecutionEnabled(false).build())
+                .toolCallbacks(tools)
+                .stream().chatResponse()
+                .concatMap(chunk -> processChunk(chunk, state))
+                .concatWith(Flux.defer(() -> finishRound(client, messages, conversationId, round, state))
+                        .subscribeOn(Schedulers.boundedElastic()));
+    }
+
+    private Flux<ServerSentEvent<String>> processChunk(ChatResponse chunk, RoundState state) {
+        if (chunk.getResult() == null || chunk.getResult().getOutput() == null) return Flux.empty();
+        AssistantMessage output = chunk.getResult().getOutput();
+        if (output.hasToolCalls()) {
+            state.toolMode = true;
+            for (AssistantMessage.ToolCall call : output.getToolCalls()) mergeToolCall(state, call);
+            return Flux.empty();
+        }
+        String text = output.getText();
+        if (text == null || text.isEmpty() || state.toolMode) return Flux.empty();
+        state.text.append(text);
+        return Flux.just(event("delta", text));
+    }
+
+    static void mergeToolCall(RoundState state, AssistantMessage.ToolCall incoming) {
+        for (int i = 0; i < state.toolCalls.size(); i++) {
+            AssistantMessage.ToolCall existing = state.toolCalls.get(i);
+            if (incoming.id() != null && !incoming.id().isBlank() && incoming.id().equals(existing.id())) {
+                state.toolCalls.set(i, new AssistantMessage.ToolCall(existing.id(), "function",
+                        existing.name(), Objects.toString(existing.arguments(), "")
+                                + Objects.toString(incoming.arguments(), "")));
+                return;
+            }
+        }
+        state.toolCalls.add(incoming);
+    }
+
+    private Flux<ServerSentEvent<String>> finishRound(
+            ChatClient client, List<Message> messages, String conversationId, int round, RoundState state) {
+        if (!state.toolMode) {
+            conversationService.saveAssistantMessage(conversationId, state.text.toString());
+            return Flux.just(event("done", ""));
+        }
+        if (maxRounds > 0 && round >= maxRounds) {
+            return forceFinalStream(client, messages, conversationId);
+        }
+        messages.add(AssistantMessage.builder().content(state.text.toString()).toolCalls(state.toolCalls).build());
+        List<ToolResponseMessage.ToolResponse> responses = new ArrayList<>(state.toolCalls.size());
+        for (AssistantMessage.ToolCall call : state.toolCalls) {
+            ToolCallback callback = null;
+            for (ToolCallback tool : tools) {
+                if (tool.getToolDefinition().name().equals(call.name())) {
+                    callback = tool;
+                    break;
+                }
+            }
+            String result;
+            if (callback == null) {
+                result = "工具未找到：" + call.name();
+            } else {
+                try {
+                    result = callback.call(call.arguments());
+                } catch (Exception ex) {
+                    result = "工具执行失败：" + ex.getClass().getSimpleName();
+                }
+            }
+            responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), result));
+        }
+        messages.add(ToolResponseMessage.builder().responses(responses).build());
+        return scheduleRound(client, messages, conversationId, round + 1);
+    }
+
+    private Flux<ServerSentEvent<String>> forceFinalStream(
+            ChatClient client, List<Message> messages, String conversationId) {
+        StringBuilder answer = new StringBuilder();
+        List<Message> finalMessages = new ArrayList<>(messages);
+        finalMessages.add(new UserMessage("请基于已有信息直接回答，不再调用工具。"));
+        return client.prompt().messages(finalMessages).stream().content()
+                .doOnNext(answer::append)
+                .map(text -> event("delta", text))
+                .concatWith(Flux.defer(() -> {
+                    conversationService.saveAssistantMessage(conversationId, answer.toString());
+                    return Flux.just(event("done", ""));
+                }));
+    }
+
+    private static ServerSentEvent<String> event(String name, String data) {
+        return ServerSentEvent.<String>builder().event(name).data(data).build();
+    }
+
+    static class RoundState {
+        final List<AssistantMessage.ToolCall> toolCalls = new ArrayList<>();
+        final StringBuilder text = new StringBuilder();
+        boolean toolMode;
     }
 
     public record ChatRequest(
             @Pattern(regexp = "[0-9a-f]{32}") String conversationId,
             @NotBlank @Size(max = 4000) String message) {
-    }
-
-    public record ChatResponse(String conversationId, String answer) {
     }
 }

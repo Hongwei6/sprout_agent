@@ -66,6 +66,7 @@ function addMessage(role, text) {
   bubble.textContent = text;
   messages.append(bubble);
   bubble.scrollIntoView({ block: 'nearest' });
+  return bubble;
 }
 
 form.addEventListener('submit', async (event) => {
@@ -85,17 +86,40 @@ form.addEventListener('submit', async (event) => {
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
       body: JSON.stringify({ conversationId: requestedConversationId, message: text })
     });
-    const result = await response.json();
-    if (token === viewToken) {
-      if (result.conversationId) activeId = result.conversationId;
-      addMessage(response.ok ? 'assistant' : 'notice', result.answer || '萌芽暂时无法回复，请稍后重试。');
-      refreshHistory().catch(() => {});
+    if (!response.ok || !response.body) throw new Error('无法开始对话');
+    const bubble = token === viewToken ? addMessage('assistant', '') : null;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let completed = false;
+    while (true) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+      buffer = buffer.replace(/\r\n/g, '\n');
+      let boundary;
+      while ((boundary = buffer.indexOf('\n\n')) !== -1) {
+        const frame = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const name = frame.split('\n').find(line => line.startsWith('event:'))?.slice(6).trim();
+        const data = frame.split('\n').filter(line => line.startsWith('data:'))
+          .map(line => line.slice(5)).join('\n');
+        if (name === 'conversation' && token === viewToken) activeId = data;
+        if (name === 'delta' && bubble) {
+          bubble.textContent += data;
+          bubble.scrollIntoView({ block: 'nearest' });
+        }
+        if (name === 'error') throw new Error(data);
+        if (name === 'done') completed = true;
+      }
+      if (done) break;
     }
-  } catch {
-    if (token === viewToken) addMessage('notice', '无法连接萌芽服务，请确认后端已启动后重试。');
+    if (!completed) throw new Error('对话流提前中断');
+    if (token === viewToken) refreshHistory().catch(() => {});
+  } catch (error) {
+    if (token === viewToken) addMessage('notice', error.message || '无法连接萌芽服务，请稍后重试。');
   } finally {
     isSending = false;
     sendButton.disabled = promptInput.value.trim().length === 0;

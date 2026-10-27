@@ -25,14 +25,16 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 
 服务启动后通过 Nacos Discovery 注册为 `sprout-agent`，在 Nacos 服务中心切换到 `sprout_agent` 命名空间查看。优先注册本机 `10.244.*` ZeroTier 地址；停止服务后实例会自动注销。
 
-打开 <http://localhost:8080>。聊天 API 为 `POST /api/chat`，请求体 `{"message":"你好"}`。
+打开 <http://localhost:8080>。聊天 API 为 `POST /api/chat`，请求体 `{"message":"你好"}`，响应为 `text/event-stream`（SSE）。
 
 每条对话和消息保存在 MySQL；页面刷新后可从历史列表继续查看。首次发送时创建对话，后续请求携带 `conversationId`；“清空对话”会删除当前对话及其消息。
 
 - `GET /api/conversations`：最近 50 条对话
 - `GET /api/conversations/{id}`：对话及消息
 - `DELETE /api/conversations/{id}`：删除对话
-- `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID
+- `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 事件依次包含 `conversation`（ID）、`delta`（增量文本）、`done`（完成）；异常发送 `error`。客户端应按事件逐段拼接文本。
+
+聊天使用流式 ReAct 轮次：识别工具调用、合并同一调用的参数分片、执行 Tavily 并将工具结果（包括失败信息）反馈给下一轮。无工具调用即结束；超过 `sprout.agent.max-rounds` 后不再提供工具，强制生成最终回答。默认最多 5 轮；设置为 0 表示不限制轮次。最终回答写入 MySQL，对话历史不保存中间工具消息。
 
 启动时，`schema-mysql.sql` 会在 MySQL 中幂等创建对话表。
 
