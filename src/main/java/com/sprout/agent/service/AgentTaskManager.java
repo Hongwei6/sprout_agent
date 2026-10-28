@@ -25,6 +25,17 @@ public class AgentTaskManager {
         return taskMap.remove(conversationId, task);
     }
 
+    public void emit(String conversationId, TaskInfo task, ReactAgentService.ChatEvent event) {
+        Sinks.EmitResult result = task.sink.tryEmitNext(event);
+        if (result == Sinks.EmitResult.FAIL_OVERFLOW && taskMap.remove(conversationId, task)) {
+            try {
+                task.cancel();
+            } finally {
+                task.sink.tryEmitError(new IllegalStateException("客户端消费过慢，已停止生成"));
+            }
+        }
+    }
+
     public boolean stopTask(String conversationId) {
         TaskInfo task = taskMap.get(conversationId);
         if (task == null) return false;

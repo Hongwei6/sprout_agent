@@ -34,6 +34,7 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 - `DELETE /api/conversations/{id}`：删除对话
 - `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 依次发送 `conversation`、`delta`（答案片段）、可选的 `reference`（来源）、可选的 `recommend`（推荐问题）和 `done`；工具状态通过 `thinking` 推送，异常发送 `error`。`recommend` 的 `data` 如 `{"type":"recommend","content":["下一步怎么做？","还有什么限制？","有哪些例子？"]}`。推荐生成失败时跳过该事件，仍保存答案并完成对话。
 - `PATCH /api/chat/{conversationId}/stop`：停止该会话正在运行的模型流，保存已生成的部分回答，向原 SSE 发送 `stopped` 后结束；无运行任务时返回 404。同一实例内，同一会话同时只允许一个任务；并发重复请求失败。任务状态保存在内存中，多实例部署时停止请求必须路由到执行该任务的实例。
+SSE 输出采用 Reactor `unicast().onBackpressureBuffer`，每个会话最多暂存 256 个事件；消费端跟不上时不丢弃或无限累积，而是取消生成、保存已经输出的部分答案并让流以“客户端消费过慢，已停止生成”错误结束。缓冲上限仅限制应用内的 SSE 队列，不代表浏览器或网络传输也有相同上限。
 - `GET /api/conversations?archived=true&query=关键词`：按状态与标题筛选最近 50 条，按 `updatedAt` 倒序；省略参数时仅返回未归档对话。
 - `PATCH /api/conversations/{id}/archive`、`PATCH /api/conversations/{id}/restore`：归档与恢复，均返回 204。
 - `PATCH /api/conversations/{id}/title`：请求 `{"title":"新标题"}`，去除首尾空格后须为 1–50 字符；重命名不改变最新消息时间。

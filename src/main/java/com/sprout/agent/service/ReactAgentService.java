@@ -8,6 +8,7 @@ import com.sprout.agent.dto.SearchResult;
 import com.sprout.agent.prompts.ReactAgentPrompts;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.List;
 import java.util.Objects;
 import java.util.concurrent.TimeUnit;
@@ -82,7 +83,8 @@ public class ReactAgentService {
     public Flux<ChatEvent> stream(String requestedConversationId, String question) {
         return Flux.defer(() -> {
             String conversationId = conversationService.createConversation(requestedConversationId, question);
-            Sinks.Many<ChatEvent> sink = Sinks.many().unicast().onBackpressureBuffer();
+            Sinks.Many<ChatEvent> sink = Sinks.many().unicast()
+                    .onBackpressureBuffer(new ArrayBlockingQueue<>(256));
             AgentTaskManager.TaskInfo task = taskManager.registerTask(conversationId, sink, "react");
             if (task == null) return Flux.error(new IllegalStateException("该会话正在执行中，请稍后再试"));
             TurnState turn = new TurnState();
@@ -110,7 +112,7 @@ public class ReactAgentService {
                                     .concatWith(scheduleRound(chatClientBuilder.getObject().build(), messages,
                                             conversationId, question, turn, 1));
                         }).subscribeOn(Schedulers.boundedElastic()).subscribe(
-                                sink::tryEmitNext,
+                                event -> taskManager.emit(conversationId, task, event),
                                 ex -> {
                                     if (taskManager.removeTask(conversationId, task)) {
                                         sink.tryEmitNext(event("error", "对话生成失败，请稍后重试。"));
