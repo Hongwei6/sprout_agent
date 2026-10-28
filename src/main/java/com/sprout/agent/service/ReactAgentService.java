@@ -26,8 +26,10 @@ import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
+import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
 @Service
@@ -38,6 +40,7 @@ public class ReactAgentService {
     private final ObjectProvider<ChatClient.Builder> chatClientBuilder;
     private final ConversationService conversationService;
     private final ObjectMapper objectMapper;
+    private final AgentTaskManager taskManager;
     private final ToolCallback[] tools;
     private final String apiKey;
     private final String model;
@@ -48,6 +51,7 @@ public class ReactAgentService {
     public ReactAgentService(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
             ConversationService conversationService,
+            AgentTaskManager taskManager,
             ObjectMapper objectMapper,
             SyncMcpToolCallbackProvider toolProvider,
             @Value("${spring.ai.openai.api-key:}") String apiKey,
@@ -57,6 +61,7 @@ public class ReactAgentService {
             @Value("${sprout.agent.enable-recommendations:true}") boolean enableRecommendations) {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
+        this.taskManager = taskManager;
         this.objectMapper = objectMapper;
         this.tools = toolProvider.getToolCallbacks();
         this.apiKey = apiKey;
@@ -75,16 +80,52 @@ public class ReactAgentService {
     }
 
     public Flux<ChatEvent> stream(String requestedConversationId, String question) {
-        ChatClient.Builder builder = chatClientBuilder.getIfAvailable();
         return Flux.defer(() -> {
             String conversationId = conversationService.createConversation(requestedConversationId, question);
-            ChatMemory memory = conversationService.createPersistentChatMemory(conversationId, maxMessages);
-            List<Message> messages = new ArrayList<>(memory.get(conversationId));
-            messages.add(0, new SystemMessage(ReactAgentPrompts.getWebSearchPrompt()));
-            messages.add(new UserMessage(question));
-            return Flux.just(event("conversation", conversationId))
-                    .concatWith(scheduleRound(builder.build(), messages, conversationId, question, new TurnState(), 1))
-                    .onErrorResume(ex -> Flux.just(event("error", "对话生成失败，请稍后重试。")));
+            Sinks.Many<ChatEvent> sink = Sinks.many().unicast().onBackpressureBuffer();
+            AgentTaskManager.TaskInfo task = taskManager.registerTask(conversationId, sink, "react");
+            if (task == null) return Flux.error(new IllegalStateException("该会话正在执行中，请稍后再试"));
+            TurnState turn = new TurnState();
+            task.onStop(() -> {
+                synchronized (turn) {
+                    if (turn.saved) return;
+                    String partial = turn.partialAnswer();
+                    conversationService.saveExchange(conversationId, question, new ConversationService.TurnResult(
+                            partial.isBlank() ? "（回答已停止）" : partial,
+                            turn.thinking.isEmpty() ? null : turn.thinking.toString(),
+                            objectMapper.valueToTree(turn.tools).toString(),
+                            objectMapper.valueToTree(turn.searchResults.values()).toString(),
+                            null, null, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
+                    turn.saved = true;
+                }
+            });
+            return sink.asFlux()
+                    .doOnSubscribe(subscription -> {
+                        Disposable execution = Flux.defer(() -> {
+                            ChatMemory memory = conversationService.createPersistentChatMemory(conversationId, maxMessages);
+                            List<Message> messages = new ArrayList<>(memory.get(conversationId));
+                            messages.add(0, new SystemMessage(ReactAgentPrompts.getWebSearchPrompt()));
+                            messages.add(new UserMessage(question));
+                            return Flux.just(event("conversation", conversationId))
+                                    .concatWith(scheduleRound(chatClientBuilder.getObject().build(), messages,
+                                            conversationId, question, turn, 1));
+                        }).subscribeOn(Schedulers.boundedElastic()).subscribe(
+                                sink::tryEmitNext,
+                                ex -> {
+                                    if (taskManager.removeTask(conversationId, task)) {
+                                        sink.tryEmitNext(event("error", "对话生成失败，请稍后重试。"));
+                                        sink.tryEmitComplete();
+                                    }
+                                },
+                                () -> {
+                                    if (taskManager.removeTask(conversationId, task)) sink.tryEmitComplete();
+                                });
+                        task.setDisposable(execution);
+                    })
+                    .doOnCancel(() -> {
+                        taskManager.removeTask(conversationId, task);
+                        task.cancel();
+                    });
         });
     }
 
@@ -117,6 +158,7 @@ public class ReactAgentService {
         String text = output.getText();
         if (text == null || text.isEmpty() || state.toolMode) return Flux.empty();
         state.text.append(text);
+        turn.appendAnswer(text);
         return Flux.just(event("delta", text));
     }
 
@@ -244,10 +286,14 @@ public class ReactAgentService {
         String recommendationsJson = generateRecommendations(conversationId, question, answer);
         Long firstResponseMs = turn.firstResponseNanos == 0 ? null
                 : TimeUnit.NANOSECONDS.toMillis(turn.firstResponseNanos - turn.startedNanos);
-        conversationService.saveExchange(conversationId, question, new ConversationService.TurnResult(
-                answer, turn.thinking.isEmpty() ? null : turn.thinking.toString(),
-                objectMapper.valueToTree(turn.tools).toString(), referencesJson, recommendationsJson,
-                firstResponseMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
+        synchronized (turn) {
+            if (turn.saved) return Flux.empty();
+            conversationService.saveExchange(conversationId, question, new ConversationService.TurnResult(
+                    answer, turn.thinking.isEmpty() ? null : turn.thinking.toString(),
+                    objectMapper.valueToTree(turn.tools).toString(), referencesJson, recommendationsJson,
+                    firstResponseMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
+            turn.saved = true;
+        }
         List<ChatEvent> events = new ArrayList<>(3);
         if (!turn.searchResults.isEmpty()) {
             events.add(event("reference", objectMapper.valueToTree(
@@ -305,6 +351,11 @@ public class ReactAgentService {
         final StringBuilder thinking = new StringBuilder();
         final List<ToolExecution> tools = new ArrayList<>();
         final LinkedHashMap<String, SearchResult> searchResults = new LinkedHashMap<>();
+        boolean saved;
+        final StringBuilder partialAnswer = new StringBuilder();
+
+        synchronized void appendAnswer(String text) { partialAnswer.append(text); }
+        synchronized String partialAnswer() { return partialAnswer.toString(); }
         long firstResponseNanos;
 
         void markFirstResponse() {

@@ -15,6 +15,9 @@ let conversations = [];
 let activeId = null;
 let viewToken = 0;
 let isSending = false;
+let runningId = null;
+let chatAbort = null;
+let stopPending = false;
 let activeArchived = false;
 let historyRequest = 0;
 
@@ -142,7 +145,7 @@ async function searchHistory() {
 
 function updateComposerState() {
   promptInput.disabled = activeArchived;
-  sendButton.disabled = activeArchived || isSending || !promptInput.value.trim();
+  sendButton.disabled = isSending ? stopPending : activeArchived || !promptInput.value.trim();
 }
 
 function renderConversation(conversation) {
@@ -288,13 +291,19 @@ form.addEventListener('submit', async (event) => {
   addMessage('user', text);
   promptInput.value = '';
   promptInput.style.height = 'auto';
-  sendButton.disabled = true;
+  chatAbort = new AbortController();
+  sendButton.type = 'button';
+  sendButton.disabled = false;
+  sendButton.title = '停止生成';
+  sendButton.setAttribute('aria-label', '停止生成');
+  sendButton.textContent = '■';
 
   let searchStatus = null;
   try {
     const response = await fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+      signal: chatAbort.signal,
       body: JSON.stringify({ conversationId: requestedConversationId, message: text })
     });
     if (!response.ok || !response.body) throw new Error('无法开始对话');
@@ -315,9 +324,13 @@ form.addEventListener('submit', async (event) => {
         const name = frame.split('\n').find(line => line.startsWith('event:'))?.slice(6).trim();
         const data = frame.split('\n').filter(line => line.startsWith('data:'))
           .map(line => line.slice(5)).join('\n');
-        if (name === 'conversation' && token === viewToken) {
-          activeId = data;
-          updateComposerState();
+        if (name === 'conversation') {
+          runningId = data;
+          sendButton.disabled = false;
+          if (token === viewToken) {
+            activeId = data;
+            updateComposerState();
+          }
         }
         if (name === 'thinking' && token === viewToken) {
           if (!searchStatus) searchStatus = addMessage('notice', data);
@@ -343,6 +356,10 @@ form.addEventListener('submit', async (event) => {
           const recommendation = JSON.parse(data);
           if (recommendation.type === 'recommend') addRecommendations(recommendation.content);
         }
+        if (name === 'stopped') {
+          if (searchStatus) searchStatus.remove();
+          completed = true;
+        }
         if (name === 'error') throw new Error(data);
         if (name === 'done') {
           if (searchStatus) searchStatus.remove();
@@ -355,15 +372,43 @@ form.addEventListener('submit', async (event) => {
     if (token === viewToken) refreshHistory().catch(() => {});
   } catch (error) {
     if (searchStatus) searchStatus.remove();
-    if (token === viewToken) addMessage('notice', error.message || '无法连接萌芽服务，请稍后重试。');
+    if (token === viewToken && !(stopPending && error.name === 'AbortError')) {
+      addMessage('notice', error.message || '无法连接萌芽服务，请稍后重试。');
+    }
   } finally {
+    sendButton.type = 'submit';
+    stopPending = false;
+    sendButton.title = '';
+    sendButton.setAttribute('aria-label', '发送消息');
+    sendButton.textContent = '↑';
+    chatAbort = null;
+    runningId = null;
     isSending = false;
     sendButton.disabled = activeArchived || promptInput.value.trim().length === 0;
   }
 });
 
+sendButton.addEventListener('click', async (event) => {
+  if (!isSending || sendButton.disabled) return;
+  event.preventDefault();
+  stopPending = true;
+  sendButton.disabled = true;
+  try {
+    if (runningId) {
+      const response = await fetch(`/api/chat/${encodeURIComponent(runningId)}/stop`, { method: 'PATCH' });
+      if (!response.ok) throw new Error('停止失败');
+    } else {
+      chatAbort.abort();
+    }
+  } catch {
+    stopPending = false;
+    sendButton.disabled = false;
+    addMessage('notice', '停止失败，请稍后重试。');
+  }
+});
+
 promptInput.addEventListener('input', () => {
-  sendButton.disabled = activeArchived || isSending || promptInput.value.trim().length === 0;
+  sendButton.disabled = isSending ? stopPending : activeArchived || !promptInput.value.trim();
   promptInput.style.height = 'auto';
   promptInput.style.height = `${Math.min(promptInput.scrollHeight, 150)}px`;
 });

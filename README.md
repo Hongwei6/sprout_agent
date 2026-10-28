@@ -27,12 +27,13 @@ Tavily API Key 存于 `sprout_agent` 命名空间的 Nacos 配置 `sprout-agent-
 
 打开 <http://localhost:8080>。聊天 API 为 `POST /api/chat`，请求体 `{"message":"你好"}`，响应为 `text/event-stream`（SSE）。
 
-每次请求根据 `conversationId` 从 MySQL 读取最近已完成的问答，重建本次请求专属的 `MessageWindowChatMemory`；运行期消息列表单独承载当前问题、流式模型输出和工具调用结果。只在成功生成最终答案后，于同一数据库事务保存当前问题、最终回答及回合明细；中断或失败的请求不写入问答。重启或多实例请求可从数据库恢复历史，历史页面仍展示完整问答和每条回答的参考来源；工具调用中间消息不注入下次模型上下文。
+每次请求根据 `conversationId` 从 MySQL 读取最近的问答，重建本次请求专属的 `MessageWindowChatMemory`；运行期消息列表单独承载当前问题、流式模型输出和工具调用结果。正常完成时保存当前问题、最终回答及回合明细；用户停止生成或客户端断开时，保存已经输出的部分回答（尚无文本则保存“回答已停止”），使下一轮“继续”可以读取原问题和已输出内容。模型或数据库异常仍不保存失败回合。重启或多实例请求可从数据库恢复历史；工具调用中间消息不注入下次模型上下文。
 
 - `GET /api/conversations`：最近 50 条对话
 - `GET /api/conversations/{id}`：对话及消息；每条助手消息包含 `references` 来源数组和 `recommendations` 推荐问题数组（没有时为空数组）。
 - `DELETE /api/conversations/{id}`：删除对话
 - `POST /api/chat`：`{"conversationId":null,"message":"你好"}`；新对话传 `null`，继续对话传已有 ID。SSE 依次发送 `conversation`、`delta`（答案片段）、可选的 `reference`（来源）、可选的 `recommend`（推荐问题）和 `done`；工具状态通过 `thinking` 推送，异常发送 `error`。`recommend` 的 `data` 如 `{"type":"recommend","content":["下一步怎么做？","还有什么限制？","有哪些例子？"]}`。推荐生成失败时跳过该事件，仍保存答案并完成对话。
+- `PATCH /api/chat/{conversationId}/stop`：停止该会话正在运行的模型流，保存已生成的部分回答，向原 SSE 发送 `stopped` 后结束；无运行任务时返回 404。同一实例内，同一会话同时只允许一个任务；并发重复请求失败。任务状态保存在内存中，多实例部署时停止请求必须路由到执行该任务的实例。
 - `GET /api/conversations?archived=true&query=关键词`：按状态与标题筛选最近 50 条，按 `updatedAt` 倒序；省略参数时仅返回未归档对话。
 - `PATCH /api/conversations/{id}/archive`、`PATCH /api/conversations/{id}/restore`：归档与恢复，均返回 204。
 - `PATCH /api/conversations/{id}/title`：请求 `{"title":"新标题"}`，去除首尾空格后须为 1–50 字符；重命名不改变最新消息时间。
