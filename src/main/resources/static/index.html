@@ -6,6 +6,7 @@
     <meta name="theme-color" content="#f7f8fc" />
     <meta name="description" content="萌芽 — 一个轻盈、友好的 AI 助手。" />
     <title>萌芽 · AI 助手</title>
+    <link rel="icon" type="image/png" href="sprout-logo.png" />
     <link rel="stylesheet" href="styles.css" />
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/lib/marked.umd.js" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.7/dist/purify.min.js" defer></script>
@@ -15,7 +16,7 @@
     <div class="app-shell">
       <aside class="sidebar" aria-label="会话导航">
         <a class="brand" href="#" aria-label="萌芽首页">
-          <span class="brand-mark" aria-hidden="true">芽</span>
+          <img class="brand-mark" src="sprout-logo.png" alt="" />
           <span class="brand-name">萌芽</span>
         </a>
         <button class="new-chat" id="new-chat" type="button"><span aria-hidden="true">＋</span> 开启新对话</button>
@@ -31,7 +32,7 @@
 
       <main class="main-panel">
         <header class="topbar">
-          <button class="mobile-brand" id="mobile-new-chat" type="button" aria-label="开启新对话"><span class="brand-mark">芽</span><span>萌芽</span></button>
+          <button class="mobile-brand" id="mobile-new-chat" type="button" aria-label="开启新对话"><img class="brand-mark" src="sprout-logo.png" alt="" /><span>萌芽</span></button>
           <div class="model-label"><span class="status-dot"></span> 萌芽助手 <span class="model-tag">预览版</span></div>
           <button class="icon-button mobile-history" id="mobile-history" type="button" aria-label="历史对话" title="历史对话">◷</button>
           <button class="icon-button" id="clear-chat" type="button" aria-label="清空当前对话" title="清空当前对话">⌫</button>
@@ -39,7 +40,7 @@
 
         <section class="chat-area" id="chat-area" aria-live="polite">
           <div class="welcome" id="welcome">
-            <div class="welcome-sprout" aria-hidden="true"><span>✳</span></div>
+            <img class="welcome-sprout" src="sprout-logo.png" alt="" />
             <p class="eyebrow">你好，我是萌芽</p>
             <h1>有什么新点子，<span>一起发芽吧。</span></h1>
             <p class="welcome-copy">可以问我问题、整理灵感，或从一个小想法开始。</p>
