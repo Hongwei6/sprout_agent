@@ -64,6 +64,29 @@ public class DatabaseConfiguration {
     ApplicationRunner migrateConversationColumns(@Qualifier("mysqlDataSource") DataSource dataSource) {
         return args -> {
             try (var connection = dataSource.getConnection()) {
+                try (var statement = connection.createStatement()) {
+                    statement.executeUpdate("""
+                            CREATE TABLE IF NOT EXISTS uploaded_files (
+                                id VARCHAR(32) NOT NULL PRIMARY KEY,
+                                name VARCHAR(255) NOT NULL,
+                                content_type VARCHAR(100) NOT NULL,
+                                size_bytes BIGINT NOT NULL,
+                                extracted_text MEDIUMTEXT NULL,
+                                created_at DATETIME(6) NOT NULL
+                            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                            """);
+                }
+                for (String column : new String[]{"file_id", "file_name"}) {
+                    try (var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
+                            "chat_messages", column)) {
+                        if (!columns.next()) {
+                            try (var statement = connection.createStatement()) {
+                                statement.executeUpdate("ALTER TABLE chat_messages ADD COLUMN "
+                                        + column + " VARCHAR(" + ("file_id".equals(column) ? "32" : "255") + ") NULL");
+                            }
+                        }
+                    }
+                }
                 try (var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
                         "chat_turn_details", "recommendations_json")) {
                     if (!columns.next()) {

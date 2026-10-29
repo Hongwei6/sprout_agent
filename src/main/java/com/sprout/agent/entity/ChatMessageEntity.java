@@ -13,6 +13,8 @@ public class ChatMessageEntity {
     private String conversationId;
     private String role;
     private String content;
+    private String fileId;
+    private String fileName;
     private LocalDateTime createdAt;
 
     public Long getId() {
@@ -53,5 +55,21 @@ public class ChatMessageEntity {
 
     public void setCreatedAt(LocalDateTime createdAt) {
         this.createdAt = createdAt;
+    }
+
+    public String getFileId() {
+        return fileId;
+    }
+
+    public void setFileId(String fileId) {
+        this.fileId = fileId;
+    }
+
+    public String getFileName() {
+        return fileName;
+    }
+
+    public void setFileName(String fileName) {
+        this.fileName = fileName;
     }
 }

@@ -1,10 +1,14 @@
-package com.sprout.agent.service;
+package com.sprout.agent.agents;
 
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.sprout.agent.dto.SearchResult;
+import com.sprout.agent.entity.UploadedFileEntity;
+import com.sprout.agent.service.AgentTaskManager;
+import com.sprout.agent.service.ConversationService;
+import com.sprout.agent.service.UploadedFileService;
 import com.sprout.agent.prompts.ReactAgentPrompts;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -25,16 +29,13 @@ import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.ai.openai.OpenAiChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import org.springframework.beans.factory.ObjectProvider;
-import org.springframework.beans.factory.annotation.Value;
-import org.springframework.stereotype.Service;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
 
-@Service
-public class ReactAgentService {
+public abstract class BaseAgent {
 
     private static final String LOCAL_API_KEY_PLACEHOLDER = "local-placeholder";
 
@@ -42,6 +43,7 @@ public class ReactAgentService {
     private final ConversationService conversationService;
     private final ObjectMapper objectMapper;
     private final AgentTaskManager taskManager;
+    private final UploadedFileService fileService;
     private final ToolCallback[] tools;
     private final String apiKey;
     private final String model;
@@ -49,21 +51,23 @@ public class ReactAgentService {
     private final int maxMessages;
     private final boolean enableRecommendations;
 
-    public ReactAgentService(
+    protected BaseAgent(
             ObjectProvider<ChatClient.Builder> chatClientBuilder,
             ConversationService conversationService,
             AgentTaskManager taskManager,
+            UploadedFileService fileService,
             ObjectMapper objectMapper,
             SyncMcpToolCallbackProvider toolProvider,
-            @Value("${spring.ai.openai.api-key:}") String apiKey,
-            @Value("${spring.ai.openai.chat.options.model:}") String model,
-            @Value("${sprout.agent.max-rounds:5}") int maxRounds,
-            @Value("${sprout.agent.max-messages:20}") int maxMessages,
-            @Value("${sprout.agent.enable-recommendations:true}") boolean enableRecommendations) {
+            String apiKey,
+            String model,
+            int maxRounds,
+            int maxMessages,
+            boolean enableRecommendations) {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
         this.taskManager = taskManager;
         this.objectMapper = objectMapper;
+        this.fileService = fileService;
         this.tools = toolProvider.getToolCallbacks();
         this.apiKey = apiKey;
         this.model = model;
@@ -80,14 +84,15 @@ public class ReactAgentService {
                 && !model.isBlank() && chatClientBuilder.getIfAvailable() != null;
     }
 
-    public Flux<ChatEvent> stream(String requestedConversationId, String question) {
+    protected Flux<ChatEvent> streamAgent(String requestedConversationId, String question, String fileId) {
         return Flux.defer(() -> {
+            UploadedFileEntity file = fileId == null ? null : fileService.requireFile(fileId);
             String conversationId = conversationService.createConversation(requestedConversationId, question);
             Sinks.Many<ChatEvent> sink = Sinks.many().unicast()
                     .onBackpressureBuffer(new ArrayBlockingQueue<>(256));
             AgentTaskManager.TaskInfo task = taskManager.registerTask(conversationId, sink, "react");
             if (task == null) return Flux.error(new IllegalStateException("该会话正在执行中，请稍后再试"));
-            TurnState turn = new TurnState();
+            TurnState turn = new TurnState(file);
             task.onStop(() -> {
                 synchronized (turn) {
                     if (turn.saved) return;
@@ -97,7 +102,7 @@ public class ReactAgentService {
                             turn.thinking.isEmpty() ? null : turn.thinking.toString(),
                             objectMapper.valueToTree(turn.tools).toString(),
                             objectMapper.valueToTree(turn.searchResults.values()).toString(),
-                            null, null, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
+                            null, null, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)), file);
                     turn.saved = true;
                 }
             });
@@ -106,11 +111,16 @@ public class ReactAgentService {
                         Disposable execution = Flux.defer(() -> {
                             ChatMemory memory = conversationService.createPersistentChatMemory(conversationId, maxMessages);
                             List<Message> messages = new ArrayList<>(memory.get(conversationId));
-                            messages.add(0, new SystemMessage(ReactAgentPrompts.getWebSearchPrompt()));
-                            messages.add(new UserMessage(question));
+                            messages.add(0, new SystemMessage(systemPrompt()));
+                            Flux<ChatEvent> answer = Flux.defer(() -> {
+                                messages.add(prepareUserMessage(question, file));
+                                return scheduleRound(chatClientBuilder.getObject().build(), messages,
+                                        conversationId, question, turn, 1);
+                            });
                             return Flux.just(event("conversation", conversationId))
-                                    .concatWith(scheduleRound(chatClientBuilder.getObject().build(), messages,
-                                            conversationId, question, turn, 1));
+                                    .concatWith(file != null && file.getContentType().startsWith("image/")
+                                            && (file.getExtractedText() == null || file.getExtractedText().isBlank())
+                                            ? Flux.just(event("thinking", "正在识别图片")).concatWith(answer) : answer);
                         }).subscribeOn(Schedulers.boundedElastic()).subscribe(
                                 event -> taskManager.emit(conversationId, task, event),
                                 ex -> {
@@ -130,6 +140,10 @@ public class ReactAgentService {
                     });
         });
     }
+    protected abstract String systemPrompt();
+
+    protected abstract UserMessage prepareUserMessage(String question, UploadedFileEntity file);
+
 
     private Flux<ChatEvent> scheduleRound(
             ChatClient client, List<Message> messages, String conversationId, String question, TurnState turn, int round) {
@@ -293,7 +307,7 @@ public class ReactAgentService {
             conversationService.saveExchange(conversationId, question, new ConversationService.TurnResult(
                     answer, turn.thinking.isEmpty() ? null : turn.thinking.toString(),
                     objectMapper.valueToTree(turn.tools).toString(), referencesJson, recommendationsJson,
-                    firstResponseMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)));
+                    firstResponseMs, TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - turn.startedNanos)), turn.file);
             turn.saved = true;
         }
         List<ChatEvent> events = new ArrayList<>(3);
@@ -350,6 +364,11 @@ public class ReactAgentService {
 
     private static class TurnState {
         final long startedNanos = System.nanoTime();
+        final UploadedFileEntity file;
+
+        TurnState(UploadedFileEntity file) {
+            this.file = file;
+        }
         final StringBuilder thinking = new StringBuilder();
         final List<ToolExecution> tools = new ArrayList<>();
         final LinkedHashMap<String, SearchResult> searchResults = new LinkedHashMap<>();

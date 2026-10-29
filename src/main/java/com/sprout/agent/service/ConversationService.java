@@ -7,6 +7,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprout.agent.dto.SearchResult;
 import com.sprout.agent.entity.ChatMessageEntity;
 import com.sprout.agent.entity.ConversationEntity;
+import com.sprout.agent.entity.UploadedFileEntity;
 import com.sprout.agent.mapper.ChatMessageMapper;
 import com.sprout.agent.mapper.ChatTurnDetailMapper;
 import com.sprout.agent.mapper.ConversationMapper;
@@ -67,10 +68,15 @@ public class ConversationService {
 
     @Transactional
     public void saveExchange(String conversationId, String question, TurnResult result) {
+        saveExchange(conversationId, question, result, null);
+    }
+
+    @Transactional
+    public void saveExchange(String conversationId, String question, TurnResult result, UploadedFileEntity file) {
         ConversationEntity conversation = requireConversation(conversationId);
         LocalDateTime now = LocalDateTime.now();
-        insertMessage(conversationId, "user", question, now);
-        ChatMessageEntity answer = insertMessage(conversationId, "assistant", result.answer(), now);
+        insertMessage(conversationId, "user", question, now, file);
+        ChatMessageEntity answer = insertMessage(conversationId, "assistant", result.answer(), now, null);
         detailMapper.insert(answer.getId(), result.thinking(), result.toolsJson(), result.referencesJson(),
                 result.recommendationsJson(), result.firstResponseMs(), result.totalResponseMs());
         conversation.setUpdatedAt(now);
@@ -147,7 +153,8 @@ public class ConversationService {
                     ChatTurnDetailMapper.ReferenceRow detail = details.get(message.getId());
                     return new MessageView(message.getRole(), message.getContent(),
                             detail == null ? List.of() : readReferences(detail.referencesJson()),
-                            detail == null ? List.of() : readRecommendations(detail.recommendationsJson()));
+                            detail == null ? List.of() : readRecommendations(detail.recommendationsJson()),
+                            message.getFileId(), message.getFileName());
                 })
                 .toList();
         return new ConversationDetail(conversation.getId(), conversation.getTitle(),
@@ -195,12 +202,17 @@ public class ConversationService {
         return conversation;
     }
 
-    private ChatMessageEntity insertMessage(String conversationId, String role, String content, LocalDateTime createdAt) {
+    private ChatMessageEntity insertMessage(
+            String conversationId, String role, String content, LocalDateTime createdAt, UploadedFileEntity file) {
         ChatMessageEntity message = new ChatMessageEntity();
         message.setConversationId(conversationId);
         message.setRole(role);
         message.setContent(content);
         message.setCreatedAt(createdAt);
+        if (file != null) {
+            message.setFileId(file.getId());
+            message.setFileName(file.getName());
+        }
         messageMapper.insert(message);
         return message;
     }
@@ -212,7 +224,8 @@ public class ConversationService {
     public record ConversationSummary(String id, String title, LocalDateTime updatedAt) {
     }
 
-    public record MessageView(String role, String text, List<SearchResult> references, List<String> recommendations) {
+    public record MessageView(String role, String text, List<SearchResult> references, List<String> recommendations,
+            String fileId, String fileName) {
     }
 
     public record ConversationDetail(String id, String title, boolean archived, List<MessageView> messages) {

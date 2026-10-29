@@ -8,6 +8,11 @@ const historyDialog = document.querySelector('#history-dialog');
 const historySearch = document.querySelector('#history-search');
 const historyFilter = document.querySelector('#history-filter');
 const historyResults = document.querySelector('#history-results');
+const dialogueTab = document.querySelector('#dialogue-tab');
+const fileTab = document.querySelector('#file-tab');
+const fileControls = document.querySelector('#file-controls');
+const fileInput = document.querySelector('#file-input');
+const fileStatus = document.querySelector('#file-status');
 const renameIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></svg>';
 const archiveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v4H4zM6 8v12h12V8M10 12h4"/></svg>';
 
@@ -20,6 +25,12 @@ let chatAbort = null;
 let stopPending = false;
 let activeArchived = false;
 let historyRequest = 0;
+let fileMode = false;
+let selectedFile = null;
+let isUploading = false;
+let uploadingFileName = '';
+let fileError = '';
+let uploadToken = 0;
 
 function renderHistory() {
   historyList.replaceChildren();
@@ -145,14 +156,48 @@ async function searchHistory() {
 
 function updateComposerState() {
   promptInput.disabled = activeArchived;
-  sendButton.disabled = isSending ? stopPending : activeArchived || !promptInput.value.trim();
+  sendButton.disabled = isSending ? stopPending
+    : activeArchived || !promptInput.value.trim() || (fileMode && (isUploading || !selectedFile));
+  fileInput.disabled = activeArchived || isSending || isUploading;
+  dialogueTab.disabled = isUploading;
+  fileTab.disabled = isUploading;
+  fileControls.classList.toggle('disabled', fileInput.disabled);
+  fileStatus.classList.toggle('error', !!fileError);
+  fileControls.hidden = !fileMode;
+  dialogueTab.classList.toggle('active', !fileMode);
+  fileTab.classList.toggle('active', fileMode);
+  if (fileMode) {
+    fileTab.setAttribute('aria-current', 'page');
+    dialogueTab.removeAttribute('aria-current');
+  } else {
+    dialogueTab.setAttribute('aria-current', 'page');
+    fileTab.removeAttribute('aria-current');
+  }
+  fileStatus.textContent = isUploading ? `正在上传：${uploadingFileName}…`
+    : fileError || (selectedFile ? `已选择：${selectedFile.name}` : '选择文件后即可向文件助手提问。');
+  fileStatus.title = fileError || selectedFile?.name || uploadingFileName;
+}
+
+function setFileMode(enabled) {
+  fileMode = enabled;
+  updateComposerState();
+}
+
+function resetFileSelection() {
+  uploadToken += 1;
+  selectedFile = null;
+  fileError = '';
+  isUploading = false;
+  uploadingFileName = '';
+  fileInput.value = '';
+  setFileMode(false);
 }
 
 function renderConversation(conversation) {
   messages.replaceChildren();
   welcome.hidden = conversation.messages.length > 0;
   for (const item of conversation.messages) {
-    addMessage(item.role, item.text);
+    addMessage(item.role, item.text, item.fileName);
     if (item.role === 'assistant') addReferences(item.references);
     if (item.role === 'assistant') addRecommendations(item.recommendations);
   }
@@ -162,7 +207,9 @@ function renderConversation(conversation) {
 async function openConversation(id) {
   activeId = id;
   activeArchived = false;
+  resetFileSelection();
   const token = ++viewToken;
+  const fileRequestToken = uploadToken;
   renderHistory();
   try {
     const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
@@ -170,6 +217,16 @@ async function openConversation(id) {
     const conversation = await response.json();
     if (token === viewToken) {
       activeArchived = conversation.archived;
+      if (fileRequestToken === uploadToken) {
+        for (let i = conversation.messages.length - 1; i >= 0; i--) {
+          const item = conversation.messages[i];
+          if (item.fileId) {
+            selectedFile = { id: item.fileId, name: item.fileName };
+            fileMode = true;
+            break;
+          }
+        }
+      }
       renderConversation(conversation);
       updateComposerState();
     }
@@ -181,7 +238,7 @@ async function openConversation(id) {
 function startConversation() {
   activeId = null;
   activeArchived = false;
-  updateComposerState();
+  resetFileSelection();
   viewToken += 1;
   messages.replaceChildren();
   welcome.hidden = false;
@@ -208,11 +265,17 @@ function renderAnswer(bubble, text) {
   }
 }
 
-function addMessage(role, text) {
+function addMessage(role, text, fileName) {
   const bubble = document.createElement('div');
   bubble.className = `message ${role}`;
   if (role === 'assistant') renderAnswer(bubble, text);
   else bubble.textContent = text;
+  if (role === 'user' && fileName) {
+    const attachment = document.createElement('small');
+    attachment.className = 'message-attachment';
+    attachment.textContent = `附件：${fileName}`;
+    bubble.append(attachment);
+  }
   messages.append(bubble);
   bubble.scrollIntoView({ block: 'nearest' });
   return bubble;
@@ -279,16 +342,55 @@ function addRecommendations(questions) {
 }
 
 
+dialogueTab.addEventListener('click', () => setFileMode(false));
+fileTab.addEventListener('click', () => setFileMode(true));
+
+fileInput.addEventListener('change', async () => {
+  const file = fileInput.files[0];
+  if (!file) return;
+  const token = ++uploadToken;
+  const view = viewToken;
+  const conversationId = activeId;
+  selectedFile = null;
+  fileError = '';
+  isUploading = true;
+  uploadingFileName = file.name;
+  fileInput.value = '';
+  updateComposerState();
+  try {
+    const body = new FormData();
+    body.append('file', file);
+    const response = await fetch('/api/files', { method: 'POST', body });
+    if (!response.ok) throw new Error('上传失败');
+    const result = await response.json();
+    if (typeof result.fileId !== 'string' || !result.fileId) throw new Error('上传失败');
+    if (token === uploadToken && view === viewToken && activeId === conversationId) {
+      selectedFile = { id: result.fileId, name: result.name || file.name };
+    }
+  } catch {
+    if (token === uploadToken && view === viewToken && activeId === conversationId) {
+      fileError = `上传「${file.name}」失败，请重试。`;
+    }
+  } finally {
+    if (token === uploadToken && view === viewToken && activeId === conversationId) {
+      isUploading = false;
+      uploadingFileName = '';
+      updateComposerState();
+    }
+  }
+});
+
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = promptInput.value.trim();
-  if (!text || isSending || activeArchived) return;
+  if (!text || isSending || activeArchived || (fileMode && (isUploading || !selectedFile))) return;
 
   const requestedConversationId = activeId;
   const token = viewToken;
+  const attachment = fileMode ? selectedFile : null;
   isSending = true;
   welcome.hidden = true;
-  addMessage('user', text);
+  addMessage('user', text, attachment?.name);
   promptInput.value = '';
   promptInput.style.height = 'auto';
   chatAbort = new AbortController();
@@ -297,14 +399,18 @@ form.addEventListener('submit', async (event) => {
   sendButton.title = '停止生成';
   sendButton.setAttribute('aria-label', '停止生成');
   sendButton.textContent = '■';
+  updateComposerState();
 
   let searchStatus = null;
   try {
-    const response = await fetch('/api/chat', {
+    const response = await fetch(attachment ? '/api/file-chat' : '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
       signal: chatAbort.signal,
-      body: JSON.stringify({ conversationId: requestedConversationId, message: text })
+      body: JSON.stringify({
+        conversationId: requestedConversationId, message: text,
+        ...(attachment ? { fileId: attachment.id } : {})
+      })
     });
     if (!response.ok || !response.body) throw new Error('无法开始对话');
     const bubble = token === viewToken ? addMessage('assistant', '') : null;
@@ -384,7 +490,7 @@ form.addEventListener('submit', async (event) => {
     chatAbort = null;
     runningId = null;
     isSending = false;
-    sendButton.disabled = activeArchived || promptInput.value.trim().length === 0;
+    updateComposerState();
   }
 });
 
@@ -408,7 +514,7 @@ sendButton.addEventListener('click', async (event) => {
 });
 
 promptInput.addEventListener('input', () => {
-  sendButton.disabled = isSending ? stopPending : activeArchived || !promptInput.value.trim();
+  updateComposerState();
   promptInput.style.height = 'auto';
   promptInput.style.height = `${Math.min(promptInput.scrollHeight, 150)}px`;
 });

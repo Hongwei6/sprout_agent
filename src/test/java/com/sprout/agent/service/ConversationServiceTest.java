@@ -11,6 +11,7 @@ import static org.mockito.Mockito.verify;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprout.agent.dto.SearchResult;
 import com.sprout.agent.entity.ChatMessageEntity;
+import com.sprout.agent.entity.UploadedFileEntity;
 import com.sprout.agent.entity.ConversationEntity;
 import com.sprout.agent.mapper.ChatMessageMapper;
 import com.sprout.agent.mapper.ChatTurnDetailMapper;
@@ -99,6 +100,8 @@ class ConversationServiceTest {
         when(conversations.selectById("session")).thenReturn(conversation);
         ChatMessageEntity question = row("user", "问题");
         question.setId(1L);
+        question.setFileId("12345678901234567890123456789012");
+        question.setFileName("说明.txt");
         ChatMessageEntity answer = row("assistant", "答案");
         answer.setId(2L);
         ChatMessageEntity olderAnswer = row("assistant", "旧答案");
@@ -114,6 +117,9 @@ class ConversationServiceTest {
                 new ConversationService(conversations, messages, details, new ObjectMapper())
                         .getConversation("session").messages();
 
+        assertEquals("12345678901234567890123456789012", history.get(0).fileId());
+        assertEquals("说明.txt", history.get(0).fileName());
+        assertEquals(null, history.get(1).fileId());
         assertEquals(List.of(), history.get(0).references());
         assertEquals(List.of(new SearchResult("https://docs.tavily.com", "Tavily 文档", "摘要")),
                 history.get(1).references());
@@ -163,6 +169,34 @@ class ConversationServiceTest {
         assertEquals(HttpStatus.BAD_REQUEST, assertThrows(ResponseStatusException.class,
                 () -> service.renameConversation("session", "  ")).getStatusCode());
         assertEquals("新名字", conversation.getTitle());
+    }
+
+    @Test
+    void completedAttachmentKeepsFileMetadataOnlyOnUserTurn() {
+        ConversationMapper conversations = mock(ConversationMapper.class);
+        ChatMessageMapper messages = mock(ChatMessageMapper.class);
+        ChatTurnDetailMapper details = mock(ChatTurnDetailMapper.class);
+        ConversationEntity conversation = new ConversationEntity();
+        conversation.setId("session");
+        when(conversations.selectById("session")).thenReturn(conversation);
+        List<ChatMessageEntity> inserted = new ArrayList<>();
+        when(messages.insert(any(ChatMessageEntity.class))).thenAnswer(invocation -> {
+            ChatMessageEntity message = invocation.getArgument(0);
+            message.setId((long) inserted.size() + 1);
+            inserted.add(message);
+            return 1;
+        });
+        UploadedFileEntity file = new UploadedFileEntity();
+        file.setId("12345678901234567890123456789012");
+        file.setName("报告.pdf");
+
+        new ConversationService(conversations, messages, details, new ObjectMapper())
+                .saveExchange("session", "概括报告", result("摘要"), file);
+
+        assertEquals(file.getId(), inserted.get(0).getFileId());
+        assertEquals(file.getName(), inserted.get(0).getFileName());
+        assertEquals(null, inserted.get(1).getFileId());
+        assertEquals("摘要", inserted.get(1).getContent());
     }
 
     private static ConversationService.TurnResult result(String answer) {

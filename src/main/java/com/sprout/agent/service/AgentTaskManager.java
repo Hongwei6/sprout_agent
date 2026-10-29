@@ -1,5 +1,6 @@
 package com.sprout.agent.service;
 
+import com.sprout.agent.agents.BaseAgent.ChatEvent;
 import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -12,7 +13,7 @@ public class AgentTaskManager {
 
     private final Map<String, TaskInfo> taskMap = new ConcurrentHashMap<>();
 
-    public TaskInfo registerTask(String conversationId, Sinks.Many<ReactAgentService.ChatEvent> sink, String agentType) {
+    public TaskInfo registerTask(String conversationId, Sinks.Many<ChatEvent> sink, String agentType) {
         TaskInfo task = new TaskInfo(sink, agentType);
         return taskMap.putIfAbsent(conversationId, task) == null ? task : null;
     }
@@ -25,7 +26,7 @@ public class AgentTaskManager {
         return taskMap.remove(conversationId, task);
     }
 
-    public void emit(String conversationId, TaskInfo task, ReactAgentService.ChatEvent event) {
+    public void emit(String conversationId, TaskInfo task, ChatEvent event) {
         Sinks.EmitResult result = task.sink.tryEmitNext(event);
         if (result == Sinks.EmitResult.FAIL_OVERFLOW && taskMap.remove(conversationId, task)) {
             try {
@@ -48,14 +49,14 @@ public class AgentTaskManager {
     }
 
     public static final class TaskInfo {
-        private final Sinks.Many<ReactAgentService.ChatEvent> sink;
+        private final Sinks.Many<ChatEvent> sink;
         private final long createTime = Instant.now().toEpochMilli();
         private final String agentType;
         private Disposable disposable;
         private boolean stopped;
         private Runnable onStop = () -> {};
 
-        private TaskInfo(Sinks.Many<ReactAgentService.ChatEvent> sink, String agentType) {
+        private TaskInfo(Sinks.Many<ChatEvent> sink, String agentType) {
             this.sink = sink;
             this.agentType = agentType;
         }
@@ -79,7 +80,7 @@ public class AgentTaskManager {
             try {
                 cancel();
             } finally {
-                sink.tryEmitNext(new ReactAgentService.ChatEvent("stopped", "已停止生成"));
+                sink.tryEmitNext(new ChatEvent("stopped", "已停止生成"));
                 sink.tryEmitComplete();
             }
         }

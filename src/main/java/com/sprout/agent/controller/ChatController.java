@@ -1,6 +1,6 @@
 package com.sprout.agent.controller;
 
-import com.sprout.agent.service.ReactAgentService;
+import com.sprout.agent.agents.WebSearchReactAgent;
 import com.sprout.agent.service.AgentTaskManager;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.NotBlank;
@@ -22,10 +22,10 @@ import reactor.core.publisher.Flux;
 @RequestMapping("/api/chat")
 public class ChatController {
 
-    private final ReactAgentService agentService;
+    private final WebSearchReactAgent agentService;
     private final AgentTaskManager taskManager;
 
-    public ChatController(ReactAgentService agentService, AgentTaskManager taskManager) {
+    public ChatController(WebSearchReactAgent agentService, AgentTaskManager taskManager) {
         this.agentService = agentService;
         this.taskManager = taskManager;
     }
