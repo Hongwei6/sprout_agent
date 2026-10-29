@@ -41,6 +41,7 @@ CREATE TABLE IF NOT EXISTS uploaded_files (
     content_type VARCHAR(100) NOT NULL,
     size_bytes BIGINT NOT NULL,
     extracted_text MEDIUMTEXT NULL,
+    indexed BOOLEAN NOT NULL DEFAULT FALSE,
     created_at DATETIME(6) NOT NULL,
     PRIMARY KEY (id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

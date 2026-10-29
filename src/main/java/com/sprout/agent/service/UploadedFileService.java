@@ -30,16 +30,19 @@ import org.springframework.web.server.ResponseStatusException;
 public class UploadedFileService {
 
     private static final long MAX_FILE_BYTES = 10L * 1024 * 1024;
-    private static final int MAX_CONTEXT_CHARS = 100_000;
+    private static final int DIRECT_TEXT_CHARS = 12_000;
 
     private final UploadedFileMapper mapper;
     private final MinioClient minio;
     private final MinioProperties properties;
+    private final FileVectorService vectors;
 
-    public UploadedFileService(UploadedFileMapper mapper, MinioClient minio, MinioProperties properties) {
+    public UploadedFileService(UploadedFileMapper mapper, MinioClient minio, MinioProperties properties,
+            FileVectorService vectors) {
         this.mapper = mapper;
         this.minio = minio;
         this.properties = properties;
+        this.vectors = vectors;
     }
 
     public UploadResponse upload(MultipartFile file) {
@@ -65,16 +68,30 @@ public class UploadedFileService {
             ensureBucket();
             minio.putObject(PutObjectArgs.builder().bucket(properties.bucket()).object(id)
                     .stream(new ByteArrayInputStream(bytes), bytes.length, -1).contentType(parsed.contentType()).build());
+            boolean indexed = parsed.text() != null && parsed.text().length() > DIRECT_TEXT_CHARS;
             UploadedFileEntity row = new UploadedFileEntity();
             row.setId(id);
             row.setName(name);
             row.setContentType(parsed.contentType());
             row.setSizeBytes(bytes.length);
-            row.setExtractedText(parsed.text());
+            row.setExtractedText(indexed ? null : parsed.text());
+            row.setIndexed(indexed);
             row.setCreatedAt(LocalDateTime.now());
+            boolean indexingAttempted = false;
             try {
+                if (indexed) {
+                    indexingAttempted = true;
+                    vectors.index(id, parsed.text());
+                }
                 mapper.insert(row);
             } catch (RuntimeException ex) {
+                if (indexingAttempted) {
+                    try {
+                        vectors.delete(id);
+                    } catch (RuntimeException cleanupFailure) {
+                        ex.addSuppressed(cleanupFailure);
+                    }
+                }
                 try {
                     minio.removeObject(RemoveObjectArgs.builder().bucket(properties.bucket()).object(id).build());
                 } catch (Exception cleanupFailure) {
@@ -182,9 +199,6 @@ public class UploadedFileService {
             }
             if (text.isBlank()) throw new IOException("文件没有可提取的文字");
             text = text.strip();
-            if (text.length() > MAX_CONTEXT_CHARS) {
-                text = text.substring(0, MAX_CONTEXT_CHARS) + "\n[附件文字过长，已截断]";
-            }
             return new Parsed(contentType, text);
         } catch (CharacterCodingException ex) {
             throw new IOException("文本文件必须使用 UTF-8 编码", ex);

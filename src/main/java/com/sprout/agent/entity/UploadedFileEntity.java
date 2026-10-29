@@ -14,6 +14,7 @@ public class UploadedFileEntity {
     private String contentType;
     private long sizeBytes;
     private String extractedText;
+    private boolean indexed;
     private LocalDateTime createdAt;
 
     public String getId() { return id; }
@@ -26,6 +27,8 @@ public class UploadedFileEntity {
     public void setSizeBytes(long sizeBytes) { this.sizeBytes = sizeBytes; }
     public String getExtractedText() { return extractedText; }
     public void setExtractedText(String extractedText) { this.extractedText = extractedText; }
+    public boolean isIndexed() { return indexed; }
+    public void setIndexed(boolean indexed) { this.indexed = indexed; }
     public LocalDateTime getCreatedAt() { return createdAt; }
     public void setCreatedAt(LocalDateTime createdAt) { this.createdAt = createdAt; }
 }

@@ -60,6 +60,18 @@ public class DatabaseConfiguration {
                 .initializeSchema(properties.initializeSchema())
                 .build();
     }
+    @Bean("fileVectorStore")
+    VectorStore fileVectorStore(
+            @Qualifier("pgVectorJdbcTemplate") JdbcTemplate jdbcTemplate,
+            EmbeddingModel embeddingModel,
+            PgVectorProperties properties) {
+        return PgVectorStore.builder(jdbcTemplate, embeddingModel)
+                .vectorTableName("vector_file_info")
+                .dimensions(properties.dimensions())
+                .initializeSchema(true)
+                .build();
+    }
+
     @Bean
     ApplicationRunner migrateConversationColumns(@Qualifier("mysqlDataSource") DataSource dataSource) {
         return args -> {
@@ -72,9 +84,18 @@ public class DatabaseConfiguration {
                                 content_type VARCHAR(100) NOT NULL,
                                 size_bytes BIGINT NOT NULL,
                                 extracted_text MEDIUMTEXT NULL,
+                                indexed BOOLEAN NOT NULL DEFAULT FALSE,
                                 created_at DATETIME(6) NOT NULL
                             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                             """);
+                }
+                try (var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
+                        "uploaded_files", "indexed")) {
+                    if (!columns.next()) {
+                        try (var statement = connection.createStatement()) {
+                            statement.executeUpdate("ALTER TABLE uploaded_files ADD COLUMN indexed BOOLEAN NOT NULL DEFAULT FALSE");
+                        }
+                    }
                 }
                 for (String column : new String[]{"file_id", "file_name"}) {
                     try (var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,

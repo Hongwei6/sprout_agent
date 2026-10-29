@@ -17,6 +17,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.messages.AssistantMessage;
 import org.springframework.ai.mcp.SyncMcpToolCallbackProvider;
 import org.springframework.beans.factory.ObjectProvider;
+import com.sprout.agent.service.FileVectorService;
 
 class BaseAgentTest {
 
@@ -59,7 +60,7 @@ class BaseAgentTest {
                 "api-key", "model", 5, 20, true);
         FileReactAgent files = new FileReactAgent(mock(ObjectProvider.class),
                 mock(ConversationService.class), mock(AgentTaskManager.class),
-                mock(UploadedFileService.class), new ObjectMapper(), mock(SyncMcpToolCallbackProvider.class),
+                mock(UploadedFileService.class), mock(FileVectorService.class), new ObjectMapper(),
                 "api-key", "model", 5, 20, true, "", "", "local-placeholder");
         UploadedFileEntity document = new UploadedFileEntity();
         document.setName("note.txt");
@@ -69,7 +70,9 @@ class BaseAgentTest {
         assertTrue(web.systemPrompt().contains("联网搜索"));
         assertTrue(files.systemPrompt().contains("文件处理规则"));
         assertEquals("问题", web.prepareUserMessage("问题", null).getText());
-        assertTrue(files.prepareUserMessage("问题", document).getText().contains("附件内容"));
+        assertTrue(files.prepareUserMessage("问题", document).getText().contains("fileId"));
+        assertFalse(files.prepareUserMessage("问题", document).getText().contains("附件内容"));
+        assertEquals(1, files.toolCallbacks(document).length);
         assertFalse(web.systemPrompt().contains("文件处理规则"));
     }
 }

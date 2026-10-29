@@ -68,7 +68,7 @@ public abstract class BaseAgent {
         this.taskManager = taskManager;
         this.objectMapper = objectMapper;
         this.fileService = fileService;
-        this.tools = toolProvider.getToolCallbacks();
+        this.tools = toolProvider == null ? new ToolCallback[0] : toolProvider.getToolCallbacks();
         this.apiKey = apiKey;
         this.model = model;
         this.maxRounds = maxRounds;
@@ -92,7 +92,7 @@ public abstract class BaseAgent {
                     .onBackpressureBuffer(new ArrayBlockingQueue<>(256));
             AgentTaskManager.TaskInfo task = taskManager.registerTask(conversationId, sink, "react");
             if (task == null) return Flux.error(new IllegalStateException("该会话正在执行中，请稍后再试"));
-            TurnState turn = new TurnState(file);
+            TurnState turn = new TurnState(file, toolCallbacks(file));
             task.onStop(() -> {
                 synchronized (turn) {
                     if (turn.saved) return;
@@ -144,13 +144,17 @@ public abstract class BaseAgent {
 
     protected abstract UserMessage prepareUserMessage(String question, UploadedFileEntity file);
 
+    protected ToolCallback[] toolCallbacks(UploadedFileEntity file) {
+        return tools;
+    }
 
     private Flux<ChatEvent> scheduleRound(
             ChatClient client, List<Message> messages, String conversationId, String question, TurnState turn, int round) {
         RoundState state = new RoundState();
+        OpenAiChatOptions.Builder options = OpenAiChatOptions.builder().internalToolExecutionEnabled(false);
         return client.prompt().messages(messages)
-                .options(OpenAiChatOptions.builder().internalToolExecutionEnabled(false).build())
-                .toolCallbacks(tools)
+                .options(options.build())
+                .toolCallbacks(turn.availableTools)
                 .stream().chatResponse()
                 .concatMap(chunk -> processChunk(chunk, state, turn))
                 .concatWith(Flux.defer(() -> finishRound(client, messages, conversationId, question, turn, round, state))
@@ -172,7 +176,8 @@ public abstract class BaseAgent {
             return Flux.empty();
         }
         String text = output.getText();
-        if (text == null || text.isEmpty() || state.toolMode) return Flux.empty();
+        if (text == null || text.isEmpty() || state.toolMode || (turn.file != null && !turn.fileToolSucceeded))
+            return Flux.empty();
         state.text.append(text);
         turn.appendAnswer(text);
         return Flux.just(event("delta", text));
@@ -195,9 +200,11 @@ public abstract class BaseAgent {
             ChatClient client, List<Message> messages, String conversationId, String question,
             TurnState turn, int round, RoundState state) {
         if (!state.toolMode) {
-            return finishAnswer(conversationId, question, state.text.toString(), turn);
+            return finishAnswer(conversationId, question,
+                    turn.file != null && !turn.fileToolSucceeded ? "未能读取附件内容，无法基于文件回答。" : state.text.toString(),
+                    turn);
         }
-        if (maxRounds > 0 && round >= maxRounds) {
+        if (maxRounds > 0 && round >= maxRounds && (turn.file == null || turn.fileToolSucceeded)) {
             return forceFinalStream(client, messages, conversationId, question, turn);
         }
         messages.add(AssistantMessage.builder().content(state.text.toString()).toolCalls(state.toolCalls).build());
@@ -206,7 +213,7 @@ public abstract class BaseAgent {
                 .flatMap(i -> {
                     AssistantMessage.ToolCall call = state.toolCalls.get(i);
                     return Flux.concat(Mono.just(event("thinking", toolStatus(call))),
-                            Mono.fromRunnable(() -> outcomes.set(i, executeToolCall(call)))
+                            Mono.fromRunnable(() -> outcomes.set(i, executeToolCall(call, turn.availableTools)))
                                     .subscribeOn(Schedulers.boundedElastic()).then(Mono.<ChatEvent>empty()));
                 })
                 .concatWith(Flux.defer(() -> {
@@ -214,6 +221,8 @@ public abstract class BaseAgent {
                     for (int i = 0; i < state.toolCalls.size(); i++) {
                         AssistantMessage.ToolCall call = state.toolCalls.get(i);
                         ToolOutcome outcome = outcomes.get(i);
+                        if (turn.file != null && call.name().equals("loadContent")
+                                && outcome.success() && !outcome.result().isBlank()) turn.fileToolSucceeded = true;
                         turn.tools.add(new ToolExecution(call.name(), Objects.toString(call.arguments(), ""), outcome.result()));
                         for (SearchResult reference : outcome.references()) {
                             turn.searchResults.putIfAbsent(reference.url(), reference);
@@ -221,7 +230,10 @@ public abstract class BaseAgent {
                         responses.add(new ToolResponseMessage.ToolResponse(call.id(), call.name(), outcome.result()));
                     }
                     messages.add(ToolResponseMessage.builder().responses(responses).build());
-                    return scheduleRound(client, messages, conversationId, question, turn, round + 1);
+                    return maxRounds > 0 && round >= maxRounds
+                            ? turn.fileToolSucceeded ? forceFinalStream(client, messages, conversationId, question, turn)
+                                    : finishAnswer(conversationId, question, "未能读取附件内容，无法基于文件回答。", turn)
+                            : scheduleRound(client, messages, conversationId, question, turn, round + 1);
                 }));
     }
 
@@ -235,22 +247,22 @@ public abstract class BaseAgent {
         }
     }
 
-    private ToolOutcome executeToolCall(AssistantMessage.ToolCall call) {
-        for (ToolCallback tool : tools) {
+    private ToolOutcome executeToolCall(AssistantMessage.ToolCall call, ToolCallback[] availableTools) {
+        for (ToolCallback tool : availableTools) {
             if (tool.getToolDefinition().name().equals(call.name())) {
                 try {
                     String result = tool.call(call.arguments());
                     return new ToolOutcome(result, call.name().contains("tavily_search")
-                            ? parseSearchResults(result, objectMapper) : List.of());
+                            ? parseSearchResults(result, objectMapper) : List.of(), true);
                 } catch (Exception ex) {
-                    return new ToolOutcome("工具执行失败：" + ex.getClass().getSimpleName(), List.of());
+                    return new ToolOutcome("工具执行失败：" + ex.getClass().getSimpleName(), List.of(), false);
                 }
             }
         }
-        return new ToolOutcome("工具未找到：" + call.name(), List.of());
+        return new ToolOutcome("工具未找到：" + call.name(), List.of(), false);
     }
 
-    private record ToolOutcome(String result, List<SearchResult> references) {
+    private record ToolOutcome(String result, List<SearchResult> references, boolean success) {
     }
 
     static List<SearchResult> parseSearchResults(String result, ObjectMapper mapper) throws JsonProcessingException {
@@ -365,9 +377,12 @@ public abstract class BaseAgent {
     private static class TurnState {
         final long startedNanos = System.nanoTime();
         final UploadedFileEntity file;
+        final ToolCallback[] availableTools;
+        boolean fileToolSucceeded;
 
-        TurnState(UploadedFileEntity file) {
+        TurnState(UploadedFileEntity file, ToolCallback[] availableTools) {
             this.file = file;
+            this.availableTools = availableTools;
         }
         final StringBuilder thinking = new StringBuilder();
         final List<ToolExecution> tools = new ArrayList<>();
