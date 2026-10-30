@@ -165,7 +165,11 @@ public abstract class BaseAgent {
         if (chunk.getResult() == null || chunk.getResult().getOutput() == null) return Flux.empty();
         AssistantMessage output = chunk.getResult().getOutput();
         Object reasoning = output.getMetadata().get("reasoningContent");
-        if (reasoning instanceof String text && !text.isEmpty()) turn.thinking.append(text);
+        Flux<ChatEvent> reasoningEvents = Flux.empty();
+        if (reasoning instanceof String text && !text.isEmpty()) {
+            turn.thinking.append(text);
+            reasoningEvents = Flux.just(event("reasoning", text));
+        }
         if (output.hasToolCalls() || (output.getText() != null && !output.getText().isEmpty())
                 || (reasoning instanceof String text && !text.isEmpty())) {
             turn.markFirstResponse();
@@ -173,14 +177,14 @@ public abstract class BaseAgent {
         if (output.hasToolCalls()) {
             state.toolMode = true;
             for (AssistantMessage.ToolCall call : output.getToolCalls()) mergeToolCall(state, call);
-            return Flux.empty();
+            return reasoningEvents;
         }
         String text = output.getText();
         if (text == null || text.isEmpty() || state.toolMode || (turn.file != null && !turn.fileToolSucceeded))
-            return Flux.empty();
+            return reasoningEvents;
         state.text.append(text);
         turn.appendAnswer(text);
-        return Flux.just(event("delta", text));
+        return reasoningEvents.concatWithValues(event("delta", text));
     }
 
     static void mergeToolCall(RoundState state, AssistantMessage.ToolCall incoming) {

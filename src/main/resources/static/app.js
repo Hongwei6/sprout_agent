@@ -197,6 +197,7 @@ function renderConversation(conversation) {
   messages.replaceChildren();
   welcome.hidden = conversation.messages.length > 0;
   for (const item of conversation.messages) {
+    if (item.role === 'assistant' && item.thinking) addThinking(item.thinking, false);
     addMessage(item.role, item.text, item.fileName);
     if (item.role === 'assistant') addReferences(item.references);
     if (item.role === 'assistant') addRecommendations(item.recommendations);
@@ -279,6 +280,20 @@ function addMessage(role, text, fileName) {
   messages.append(bubble);
   bubble.scrollIntoView({ block: 'nearest' });
   return bubble;
+}
+
+function addThinking(text, open = true) {
+  const section = document.createElement('details');
+  section.className = 'thinking';
+  section.open = open;
+  const heading = document.createElement('summary');
+  heading.textContent = open ? '正在思考…' : '思考过程';
+  const content = document.createElement('div');
+  content.className = 'thinking-content';
+  content.textContent = text;
+  section.append(heading, content);
+  messages.append(section);
+  return { section, heading, content };
 }
 
 function addReferences(references) {
@@ -402,6 +417,14 @@ form.addEventListener('submit', async (event) => {
   updateComposerState();
 
   let searchStatus = null;
+  let thinking = null;
+  let thought = '';
+  const finishThinking = () => {
+    if (thinking) {
+      thinking.section.open = false;
+      thinking.heading.textContent = '思考过程';
+    }
+  };
   try {
     const response = await fetch(attachment ? '/api/file-chat' : '/api/chat', {
       method: 'POST',
@@ -438,11 +461,21 @@ form.addEventListener('submit', async (event) => {
             updateComposerState();
           }
         }
+        if (name === 'reasoning' && token === viewToken) {
+          if (!thinking) {
+            thinking = addThinking('', true);
+            if (bubble) messages.insertBefore(thinking.section, bubble);
+          }
+          thought += data;
+          thinking.content.textContent = thought;
+          thinking.section.scrollIntoView({ block: 'nearest' });
+        }
         if (name === 'thinking' && token === viewToken) {
           if (!searchStatus) searchStatus = addMessage('notice', data);
           else searchStatus.textContent = data;
         }
         if (name === 'delta' && bubble) {
+          finishThinking();
           if (searchStatus) {
             searchStatus.remove();
             searchStatus = null;
@@ -462,6 +495,7 @@ form.addEventListener('submit', async (event) => {
           const recommendation = JSON.parse(data);
           if (recommendation.type === 'recommend') addRecommendations(recommendation.content);
         }
+        if (name === 'stopped' || name === 'done') finishThinking();
         if (name === 'stopped') {
           if (searchStatus) searchStatus.remove();
           completed = true;
@@ -477,6 +511,7 @@ form.addEventListener('submit', async (event) => {
     if (!completed) throw new Error('对话流提前中断');
     if (token === viewToken) refreshHistory().catch(() => {});
   } catch (error) {
+    finishThinking();
     if (searchStatus) searchStatus.remove();
     if (token === viewToken && !(stopPending && error.name === 'AbortError')) {
       addMessage('notice', error.message || '无法连接萌芽服务，请稍后重试。');

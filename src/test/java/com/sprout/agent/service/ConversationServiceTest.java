@@ -108,10 +108,10 @@ class ConversationServiceTest {
         olderAnswer.setId(3L);
         when(messages.selectList(any())).thenReturn(List.of(question, answer, olderAnswer));
         when(details.findReferences("session")).thenReturn(List.of(
-                new ChatTurnDetailMapper.ReferenceRow(2L,
+                new ChatTurnDetailMapper.ReferenceRow(2L, "先分析问题，再核对资料",
                         "[{\"url\":\"https://docs.tavily.com\",\"title\":\"Tavily 文档\",\"content\":\"摘要\"}]",
                         "[\"继续了解 Tavily？\",\"如何配置搜索？\",\"还有哪些案例？\"]"),
-                new ChatTurnDetailMapper.ReferenceRow(3L, "[\"https://example.org/legacy\"]", null)));
+                new ChatTurnDetailMapper.ReferenceRow(3L, null, "[\"https://example.org/legacy\"]", null)));
 
         List<ConversationService.MessageView> history =
                 new ConversationService(conversations, messages, details, new ObjectMapper())
@@ -120,6 +120,8 @@ class ConversationServiceTest {
         assertEquals("12345678901234567890123456789012", history.get(0).fileId());
         assertEquals("说明.txt", history.get(0).fileName());
         assertEquals(null, history.get(1).fileId());
+        assertEquals("先分析问题，再核对资料", history.get(1).thinking());
+        assertEquals(null, history.get(0).thinking());
         assertEquals(List.of(), history.get(0).references());
         assertEquals(List.of(new SearchResult("https://docs.tavily.com", "Tavily 文档", "摘要")),
                 history.get(1).references());

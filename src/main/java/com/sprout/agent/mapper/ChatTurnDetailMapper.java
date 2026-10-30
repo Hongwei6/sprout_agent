@@ -25,18 +25,19 @@ public interface ChatTurnDetailMapper {
             @Param("totalResponseMs") long totalResponseMs);
 
     @Select("""
-            SELECT d.assistant_message_id, d.references_json, d.recommendations_json
+            SELECT d.assistant_message_id, d.thinking, d.references_json, d.recommendations_json
             FROM chat_turn_details d
             JOIN chat_messages m ON m.id = d.assistant_message_id
             WHERE m.conversation_id = #{conversationId}
             """)
     @ConstructorArgs({
             @Arg(column = "assistant_message_id", javaType = Long.class),
+            @Arg(column = "thinking", javaType = String.class),
             @Arg(column = "references_json", javaType = String.class),
             @Arg(column = "recommendations_json", javaType = String.class)
     })
     List<ReferenceRow> findReferences(@Param("conversationId") String conversationId);
 
-    record ReferenceRow(Long assistantMessageId, String referencesJson, String recommendationsJson) {
+    record ReferenceRow(Long assistantMessageId, String thinking, String referencesJson, String recommendationsJson) {
     }
 }

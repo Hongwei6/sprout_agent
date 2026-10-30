@@ -154,6 +154,7 @@ public class ConversationService {
                     return new MessageView(message.getRole(), message.getContent(),
                             detail == null ? List.of() : readReferences(detail.referencesJson()),
                             detail == null ? List.of() : readRecommendations(detail.recommendationsJson()),
+                            detail == null ? null : detail.thinking(),
                             message.getFileId(), message.getFileName());
                 })
                 .toList();
@@ -225,7 +226,7 @@ public class ConversationService {
     }
 
     public record MessageView(String role, String text, List<SearchResult> references, List<String> recommendations,
-            String fileId, String fileName) {
+            String thinking, String fileId, String fileName) {
     }
 
     public record ConversationDetail(String id, String title, boolean archived, List<MessageView> messages) {
