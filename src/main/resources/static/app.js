@@ -10,9 +10,13 @@ const historyFilter = document.querySelector('#history-filter');
 const historyResults = document.querySelector('#history-results');
 const dialogueTab = document.querySelector('#dialogue-tab');
 const fileTab = document.querySelector('#file-tab');
+const pptTab = document.querySelector('#ppt-tab');
 const fileControls = document.querySelector('#file-controls');
 const fileInput = document.querySelector('#file-input');
 const fileStatus = document.querySelector('#file-status');
+const composerHint = document.querySelector('.composer-hint');
+const pptDownload = document.querySelector('#ppt-download');
+const pptDownloadLink = document.querySelector('#ppt-download-link');
 const renameIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></svg>';
 const archiveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v4H4zM6 8v12h12V8M10 12h4"/></svg>';
 
@@ -25,7 +29,8 @@ let chatAbort = null;
 let stopPending = false;
 let activeArchived = false;
 let historyRequest = 0;
-let fileMode = false;
+let assistantMode = 'dialogue';
+let modeSelection = 0;
 let selectedFile = null;
 let isUploading = false;
 let uploadingFileName = '';
@@ -155,31 +160,35 @@ async function searchHistory() {
 }
 
 function updateComposerState() {
+  const fileMode = assistantMode === 'file';
   promptInput.disabled = activeArchived;
   sendButton.disabled = isSending ? stopPending
     : activeArchived || !promptInput.value.trim() || (fileMode && (isUploading || !selectedFile));
   fileInput.disabled = activeArchived || isSending || isUploading;
-  dialogueTab.disabled = isUploading;
-  fileTab.disabled = isUploading;
+  dialogueTab.disabled = isUploading || isSending;
+  fileTab.disabled = isUploading || isSending;
+  pptTab.disabled = isUploading || isSending;
   fileControls.classList.toggle('disabled', fileInput.disabled);
   fileStatus.classList.toggle('error', !!fileError);
   fileControls.hidden = !fileMode;
-  dialogueTab.classList.toggle('active', !fileMode);
-  fileTab.classList.toggle('active', fileMode);
-  if (fileMode) {
-    fileTab.setAttribute('aria-current', 'page');
-    dialogueTab.removeAttribute('aria-current');
-  } else {
-    dialogueTab.setAttribute('aria-current', 'page');
-    fileTab.removeAttribute('aria-current');
+  for (const [tab, mode] of [[dialogueTab, 'dialogue'], [fileTab, 'file'], [pptTab, 'ppt']]) {
+    const selected = assistantMode === mode;
+    tab.classList.toggle('active', selected);
+    if (selected) tab.setAttribute('aria-current', 'page');
+    else tab.removeAttribute('aria-current');
   }
+  promptInput.placeholder = assistantMode === 'ppt'
+    ? '描述 PPT 主题、页数、风格和受众…' : '给萌芽发消息…';
+  composerHint.textContent = assistantMode === 'ppt'
+    ? 'PPT 生成完成后可下载 .pptx 文件。' : '萌芽还在成长中，回答可能不够准确。';
   fileStatus.textContent = isUploading ? `正在上传：${uploadingFileName}…`
     : fileError || (selectedFile ? `已选择：${selectedFile.name}` : '选择文件后即可向文件助手提问。');
   fileStatus.title = fileError || selectedFile?.name || uploadingFileName;
 }
 
-function setFileMode(enabled) {
-  fileMode = enabled;
+function setAssistantMode(mode) {
+  modeSelection += 1;
+  assistantMode = mode;
   updateComposerState();
 }
 
@@ -190,19 +199,62 @@ function resetFileSelection() {
   isUploading = false;
   uploadingFileName = '';
   fileInput.value = '';
-  setFileMode(false);
+  setAssistantMode('dialogue');
 }
 
-function renderConversation(conversation) {
+function renderConversation(conversation, isPpt = false) {
   messages.replaceChildren();
   welcome.hidden = conversation.messages.length > 0;
   for (const item of conversation.messages) {
-    if (item.role === 'assistant' && item.thinking) addThinking(item.thinking, false);
-    addMessage(item.role, item.text, item.fileName);
+    if (item.role === 'assistant' && item.thinking) {
+      if (isPpt) addPptProgress(item.thinking);
+      else addThinking(item.thinking, false);
+    }
+    if (!(isPpt && item.role === 'assistant' && isPptDownloadAnswer(item.text))) {
+      addMessage(item.role, item.text, item.fileName);
+    }
     if (item.role === 'assistant') addReferences(item.references);
     if (item.role === 'assistant') addRecommendations(item.recommendations);
   }
   messages.scrollTop = messages.scrollHeight;
+}
+
+function isPptDownloadAnswer(text) {
+  return /^\[下载 PPT 文件\]\(\/api\/ppt\/conversations\/[0-9a-f]{32}\/download\)$/.test((text || '').trim());
+}
+
+function setPptDownload(id, ready) {
+  pptDownload.hidden = !ready;
+  if (ready) pptDownloadLink.href = `/api/ppt/conversations/${encodeURIComponent(id)}/download`;
+  else pptDownloadLink.removeAttribute('href');
+}
+
+function addPptProgress(initial = '') {
+  const section = document.createElement('section');
+  section.className = 'ppt-progress';
+  const heading = document.createElement('div');
+  heading.className = 'ppt-progress-header';
+  heading.textContent = 'PPT 生成进度';
+  const log = document.createElement('div');
+  log.className = 'ppt-progress-log';
+  log.setAttribute('role', 'log');
+  log.setAttribute('aria-label', 'PPT 生成进度');
+  log.textContent = initial.trim();
+  section.append(heading, log);
+  messages.append(section);
+  log.scrollTop = log.scrollHeight;
+  return { section, log };
+}
+
+function appendPptProgress(panel, text) {
+  panel.log.textContent += (panel.log.textContent ? '\n' : '') + text;
+  panel.log.scrollTop = panel.log.scrollHeight;
+}
+
+function showPptStatus(text) {
+  const log = [...messages.querySelectorAll('.ppt-progress-log')].at(-1);
+  const panel = log ? { log } : addPptProgress();
+  if (!panel.log.textContent.endsWith(text)) appendPptProgress(panel, text);
 }
 
 async function openConversation(id) {
@@ -210,29 +262,60 @@ async function openConversation(id) {
   activeArchived = false;
   resetFileSelection();
   const token = ++viewToken;
+  setPptDownload(null, false);
   const fileRequestToken = uploadToken;
+  const selectedModeToken = modeSelection;
+  let hasSavedMessages = false;
   renderHistory();
   try {
     const response = await fetch(`/api/conversations/${encodeURIComponent(id)}`);
     if (!response.ok) throw new Error('无法读取对话');
     const conversation = await response.json();
-    if (token === viewToken) {
-      activeArchived = conversation.archived;
-      if (fileRequestToken === uploadToken) {
-        for (let i = conversation.messages.length - 1; i >= 0; i--) {
-          const item = conversation.messages[i];
-          if (item.fileId) {
-            selectedFile = { id: item.fileId, name: item.fileName };
-            fileMode = true;
-            break;
-          }
+    hasSavedMessages = conversation.messages.length > 0;
+    if (token !== viewToken) return;
+    activeArchived = conversation.archived;
+    if (fileRequestToken === uploadToken) {
+      for (let i = conversation.messages.length - 1; i >= 0; i--) {
+        const item = conversation.messages[i];
+        if (item.fileId) {
+          selectedFile = { id: item.fileId, name: item.fileName };
+          if (selectedModeToken === modeSelection) assistantMode = 'file';
+          break;
         }
       }
-      renderConversation(conversation);
-      updateComposerState();
     }
+    renderConversation(conversation);
+    updateComposerState();
   } catch {
     if (token === viewToken) startConversation();
+    return;
+  }
+  try {
+    const response = await fetch(`/api/ppt/conversations/${encodeURIComponent(id)}`);
+    if (response.status === 404) return;
+    if (!response.ok) throw new Error('无法读取 PPT 任务');
+    const instance = await response.json();
+    if (token !== viewToken) return;
+    if (selectedModeToken === modeSelection) setAssistantMode('ppt');
+    renderConversation(conversation, true);
+    setPptDownload(id, instance.status === 'SUCCESS');
+    welcome.hidden = true;
+    if (!hasSavedMessages && instance.outline) addMessage('assistant', instance.outline);
+    if (instance.status === 'FAILED') {
+      showPptStatus(`PPT 任务失败：${instance.error || '请检查生成日志'}。已保存进度，可根据原因调整后重试。`);
+    } else if (instance.status === 'RENDER') {
+      showPptStatus('页面 Schema 与配图已保存，可发送“继续”生成 PPT 文件。');
+    } else if (instance.status !== 'SUCCESS' && instance.pptSchema) {
+      showPptStatus('页面 Schema 已保存，配图尚未完成；可发送“继续”恢复生成。');
+    } else if (instance.status !== 'SUCCESS' && instance.outline) {
+      showPptStatus('PPT 大纲已完成，正在准备页面 Schema。');
+    } else if (instance.status === 'REQUIREMENT') {
+      showPptStatus('等待补充需求；当前尚无 PPT 文件。');
+    } else if (instance.status !== 'SUCCESS') {
+      showPptStatus('PPT 大纲尚未生成，当前没有 PPT 文件。');
+    }
+  } catch {
+    if (token === viewToken) addMessage('notice', '无法读取 PPT 大纲，请稍后重试。');
   }
 }
 
@@ -240,6 +323,7 @@ function startConversation() {
   activeId = null;
   activeArchived = false;
   resetFileSelection();
+  setPptDownload(null, false);
   viewToken += 1;
   messages.replaceChildren();
   welcome.hidden = false;
@@ -357,8 +441,9 @@ function addRecommendations(questions) {
 }
 
 
-dialogueTab.addEventListener('click', () => setFileMode(false));
-fileTab.addEventListener('click', () => setFileMode(true));
+dialogueTab.addEventListener('click', () => setAssistantMode('dialogue'));
+fileTab.addEventListener('click', () => setAssistantMode('file'));
+pptTab.addEventListener('click', () => setAssistantMode('ppt'));
 
 fileInput.addEventListener('change', async () => {
   const file = fileInput.files[0];
@@ -398,11 +483,12 @@ fileInput.addEventListener('change', async () => {
 form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = promptInput.value.trim();
-  if (!text || isSending || activeArchived || (fileMode && (isUploading || !selectedFile))) return;
+  const mode = assistantMode;
+  if (!text || isSending || activeArchived || (mode === 'file' && (isUploading || !selectedFile))) return;
 
   const requestedConversationId = activeId;
   const token = viewToken;
-  const attachment = fileMode ? selectedFile : null;
+  const attachment = mode === 'file' ? selectedFile : null;
   isSending = true;
   welcome.hidden = true;
   addMessage('user', text, attachment?.name);
@@ -418,6 +504,8 @@ form.addEventListener('submit', async (event) => {
 
   let searchStatus = null;
   let thinking = null;
+  let pptProgress = mode === 'ppt' && token === viewToken ? addPptProgress() : null;
+  if (mode === 'ppt') setPptDownload(null, false);
   let thought = '';
   const finishThinking = () => {
     if (thinking) {
@@ -426,7 +514,7 @@ form.addEventListener('submit', async (event) => {
     }
   };
   try {
-    const response = await fetch(attachment ? '/api/file-chat' : '/api/chat', {
+    const response = await fetch(mode === 'ppt' ? '/api/ppt' : attachment ? '/api/file-chat' : '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
       signal: chatAbort.signal,
@@ -442,6 +530,7 @@ form.addEventListener('submit', async (event) => {
     const decoder = new TextDecoder();
     let buffer = '';
     let completed = false;
+    let pptCompleted = false;
     while (true) {
       const { value, done } = await reader.read();
       buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
@@ -470,8 +559,11 @@ form.addEventListener('submit', async (event) => {
           thinking.content.textContent = thought;
           thinking.section.scrollIntoView({ block: 'nearest' });
         }
-        if (name === 'thinking' && token === viewToken) {
-          if (!searchStatus) searchStatus = addMessage('notice', data);
+        if ((name === 'thinking' || name === 'stage') && token === viewToken) {
+          if (mode === 'ppt') {
+            if (!pptProgress) pptProgress = addPptProgress();
+            appendPptProgress(pptProgress, data);
+          } else if (!searchStatus) searchStatus = addMessage('notice', data);
           else searchStatus.textContent = data;
         }
         if (name === 'delta' && bubble) {
@@ -481,8 +573,11 @@ form.addEventListener('submit', async (event) => {
             searchStatus = null;
           }
           answer += data;
-          renderAnswer(bubble, answer);
-          bubble.scrollIntoView({ block: 'nearest' });
+          if (!(mode === 'ppt' && ('[下载 PPT 文件]'.startsWith(answer)
+            || answer.startsWith('[下载 PPT 文件](')))) {
+            renderAnswer(bubble, answer);
+            bubble.scrollIntoView({ block: 'nearest' });
+          }
         }
         if (name === 'reference' && token === viewToken) {
           const reference = JSON.parse(data);
@@ -504,11 +599,34 @@ form.addEventListener('submit', async (event) => {
         if (name === 'done') {
           if (searchStatus) searchStatus.remove();
           completed = true;
+          if (mode === 'ppt') pptCompleted = true;
         }
       }
       if (done) break;
     }
     if (!completed) throw new Error('对话流提前中断');
+    if (mode === 'ppt' && bubble && (!answer.trim() || isPptDownloadAnswer(answer))) bubble.remove();
+    if (pptCompleted && token === viewToken && runningId) {
+      try {
+        const statusResponse = await fetch(`/api/ppt/conversations/${encodeURIComponent(runningId)}`);
+        if (!statusResponse.ok) throw new Error('无法读取 PPT 任务状态');
+        const instance = await statusResponse.json();
+        if (token === viewToken) {
+          if (instance.status === 'FAILED') {
+            showPptStatus(`PPT 任务失败：${instance.error || '请检查生成日志'}。已保存进度，可根据原因调整后重试。`);
+          } else if (instance.status === 'SUCCESS') {
+            setPptDownload(runningId, true);
+          } else if (instance.status === 'RENDER') {
+            showPptStatus('页面 Schema 与配图已保存，可发送“继续”生成 PPT 文件。');
+          } else if (instance.pptSchema) {
+            showPptStatus('页面 Schema 已保存，配图尚未完成；可发送“继续”恢复生成。');
+          } else if (instance.outline) showPptStatus('PPT 大纲已完成，正在准备页面 Schema。');
+          else if (instance.status === 'REQUIREMENT') showPptStatus('等待补充需求；当前尚无 PPT 文件。');
+        }
+      } catch {
+        if (token === viewToken) showPptStatus('无法读取 PPT 任务状态，请稍后查看历史记录。');
+      }
+    }
     if (token === viewToken) refreshHistory().catch(() => {});
   } catch (error) {
     finishThinking();

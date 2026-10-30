@@ -7,10 +7,10 @@
     <meta name="description" content="萌芽 — 一个轻盈、友好的 AI 助手。" />
     <title>萌芽 · AI 助手</title>
     <link rel="icon" type="image/png" href="sprout-logo-transparent.png" />
-    <link rel="stylesheet" href="styles.css?v=file-assistant" />
+    <link rel="stylesheet" href="styles.css?v=ppt-progress" />
     <script src="https://cdn.jsdelivr.net/npm/marked@15.0.12/lib/marked.umd.js" defer></script>
     <script src="https://cdn.jsdelivr.net/npm/dompurify@3.2.7/dist/purify.min.js" defer></script>
-    <script src="app.js?v=file-assistant" defer></script>
+    <script src="app.js?v=ppt-progress" defer></script>
   </head>
   <body>
     <div class="app-shell">
@@ -50,10 +50,14 @@
         </section>
 
         <footer class="composer-wrap">
+          <div class="ppt-download" id="ppt-download" hidden>
+            <span>PPT 文件已生成</span>
+            <a id="ppt-download-link" href="#">下载 PPT 文件 ↓</a>
+          </div>
           <nav class="assistant-tabs" aria-label="助手类型">
             <button class="assistant-tab active" id="dialogue-tab" type="button" aria-current="page">对话助手</button>
             <button class="assistant-tab" id="file-tab" type="button">文件助手</button>
-            <button class="assistant-tab" type="button" disabled title="PPT 生成暂未开放">PPT生成</button>
+            <button class="assistant-tab" id="ppt-tab" type="button" title="生成并下载 PPT 文件">PPT生成</button>
             <button class="assistant-tab" type="button" disabled title="深度研究暂未开放">深度研究</button>
           </nav>
           <div class="file-controls" id="file-controls" hidden>

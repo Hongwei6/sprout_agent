@@ -9,6 +9,13 @@ spring:
     multipart:
       max-file-size: 10MB
       max-request-size: 20MB
+  ai:
+    openai:
+      image:
+        base-url: ${SPRING_AI_OPENAI_IMAGE_BASE_URL:}
+        api-key: ${SPRING_AI_OPENAI_IMAGE_API_KEY:}
+        options:
+          model: ${SPRING_AI_OPENAI_IMAGE_OPTIONS_MODEL:dall-e-3}
   cloud:
     inetutils:
       preferred-networks:
@@ -24,3 +31,7 @@ spring:
         namespace: ${spring.cloud.nacos.config.namespace}
         username: ${NACOS_USERNAME}
         password: ${NACOS_PASSWORD}
+sprout:
+  ppt:
+    image:
+      public-base-url: ${SPROUT_PPT_IMAGE_PUBLIC_BASE_URL:}

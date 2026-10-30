@@ -89,6 +89,37 @@ public class DatabaseConfiguration {
                             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
                             """);
                 }
+                try (var statement = connection.createStatement()) {
+                    statement.executeUpdate("""
+                            CREATE TABLE IF NOT EXISTS ai_ppt_inst (
+                                id BIGINT NOT NULL AUTO_INCREMENT,
+                                conversation_id VARCHAR(32) NOT NULL,
+                                query VARCHAR(4000) NOT NULL,
+                                status VARCHAR(32) NOT NULL,
+                                failed_stage VARCHAR(32) NULL,
+                                requirement MEDIUMTEXT NULL,
+                                search_info MEDIUMTEXT NULL,
+                                template_code MEDIUMTEXT NULL,
+                                outline MEDIUMTEXT NULL,
+                                ppt_schema MEDIUMTEXT NULL,
+                                error MEDIUMTEXT NULL,
+                                created_at DATETIME(6) NOT NULL,
+                                updated_at DATETIME(6) NOT NULL,
+                                PRIMARY KEY (id),
+                                INDEX idx_ai_ppt_inst_conversation_id (conversation_id, id),
+                                CONSTRAINT fk_ai_ppt_inst_conversation
+                                    FOREIGN KEY (conversation_id) REFERENCES conversations (id) ON DELETE CASCADE
+                            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+                            """);
+                }
+                try (var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
+                        "ai_ppt_inst", "ppt_schema")) {
+                    if (!columns.next()) {
+                        try (var statement = connection.createStatement()) {
+                            statement.executeUpdate("ALTER TABLE ai_ppt_inst ADD COLUMN ppt_schema MEDIUMTEXT NULL");
+                        }
+                    }
+                }
                 try (var columns = connection.getMetaData().getColumns(connection.getCatalog(), null,
                         "uploaded_files", "indexed")) {
                     if (!columns.next()) {
