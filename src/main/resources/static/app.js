@@ -352,12 +352,15 @@ function renderAnswer(bubble, text) {
     FORBID_TAGS: ['img', 'iframe', 'form', 'style']
   });
   for (const link of bubble.querySelectorAll('a[href]')) {
-    if (!['http:', 'https:'].includes(new URL(link.href).protocol)) {
+    try {
+      const url = new URL(link.getAttribute('href'));
+      if (!['http:', 'https:'].includes(url.protocol)) throw new TypeError('不支持的链接协议');
+      link.href = url.href;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+    } catch {
       link.removeAttribute('href');
-      continue;
     }
-    link.target = '_blank';
-    link.rel = 'noopener noreferrer';
   }
 }
 
