@@ -31,7 +31,7 @@ PPT 生成过程通过 SSE `thinking` 事件逐阶段推送；每张配图先由
 若文生图接口返回 `DataInspectionFailed`，系统会将上次被拒绝的描述交给对话模型重新改写，再生成图片；每张图最多调用文生图模型 3 次，三次均被拒绝才标记 `FAILED/SCHEMA` 并提示用户调整主题或配图要求。其他模型错误、改写失败或上传失败不重试。已保存的配图不会丢失；发送“继续”可从未完成的配图恢复，但服务商的输出图片审核仍可能拒绝新结果。
 PPT 每个阶段完成后更新 MySQL 状态；失败时记录失败阶段和原因，向 SSE 输出可读说明，并把说明与本轮进度写入会话。需求不完整会停在 `FAILED`（失败阶段 `REQUIREMENT`），补充需求后从澄清阶段恢复；其他失败发送“继续”或“重试”从失败阶段恢复，不重复已完成的配图。点击停止保留当前检查点，同会话再次发送“继续”即可恢复；明确要求“新建/重新生成”才创建新实例。已成功的 PPT 不会因“继续”重复生成。
 
-打开 <http://localhost:8080>。联网聊天使用 `POST /api/chat`，文件聊天先通过 `POST /api/files` 上传，再调用 `POST /api/file-chat` 并传入 `fileId`；PPT 生成入口使用 `POST /api/ppt`。三种接口均返回 `text/event-stream`（SSE）。
+打开 <http://localhost:8080>。联网聊天使用 `POST /api/chat`，文件聊天先通过 `POST /api/files` 上传，再调用 `POST /api/file-chat` 并传入 `fileId`；PPT 使用 `POST /api/ppt`，深度研究使用 `POST /api/research`。接口均返回 `text/event-stream`（SSE）。
 
 每次请求根据 `conversationId` 从 MySQL 读取最近的问答，重建本次请求专属的 `MessageWindowChatMemory`；运行期消息列表单独承载当前问题、流式模型输出和工具调用结果。正常完成时保存当前问题、最终回答及回合明细；用户停止生成或客户端断开时，保存已经输出的部分回答（尚无文本则保存“回答已停止”），使下一轮“继续”可以读取原问题和已输出内容。模型或数据库异常仍不保存失败回合。重启或多实例请求可从数据库恢复历史；工具调用中间消息不注入下次模型上下文。
 
@@ -41,10 +41,11 @@ PPT 每个阶段完成后更新 MySQL 状态；失败时记录失败阶段和原
 - `POST /api/files`：`multipart/form-data`，表单字段名为 `file`；返回 `{"fileId":"32位小写十六进制","name":"文档.pdf","contentType":"application/pdf","size":12345}`（响应字段不因索引而改变）。支持 PDF、DOCX、UTF-8 TXT/MD、PNG/JPEG/WebP/GIF，最大 10 MiB；没有可提取文字的文档返回 400。上传的原文件存入 MinIO，文件元数据存入 MySQL；不超过 12000 字符的文档文字直接存于 MySQL，超过 12000 字符的文档按片段索引至 pgvector（`vector_file_info`），MySQL `uploaded_files.extracted_text` 留空。
 - `POST /api/chat`：`{"conversationId":null,"message":"你好"}`，使用联网搜索 Agent；新对话传 `null`，继续对话传已有 ID。
 - `POST /api/file-chat`：`{"conversationId":null,"message":"请总结附件","fileId":"上传返回的fileId"}`，`fileId` 必填，使用文件 Agent。当前消息只提供附件名称和 fileId，不注入正文；模型必须先调用仅在文件 Agent 中可用的本地 `loadContent(fileId,question)`，才能基于返回内容回答。短文档由工具直接读取 MySQL 文本；已索引长文档按当前问题从 pgvector 检索最相关的 5 个片段，可用不同问题多次检索。图片首次提问时从 MinIO 读取，由 `SPROUT_VISION_BASE_URL` / `SPROUT_VISION_MODEL` 视觉模型识别并将描述存入 MySQL 的 `uploaded_files.extracted_text`；工具读取缓存的描述，后续提问（包括服务重启后）不再识别图片，仅首次识别推送 `thinking`。识别失败返回 `error`，不会存入虚构描述。两种聊天的 SSE 均发送 `conversation`、可选的 `reasoning`（模型推理文本分片）、可选的 `thinking`（工具状态）、`delta`、可选的 `reference`、可选的 `recommend` 和 `done`；异常发送 `error`。前端实时展示推理，正文开始或流结束时自动折叠；历史对话可再次展开。
-- `POST /api/ppt`：`{"conversationId":null,"message":"生成一份5页绿色能源科普PPT，面向大学生"}`，使用独立 PPT Agent；返回 `conversation`、阶段 `thinking`、流式 `delta` 和 `done`，失败时返回 `error`。流程包含需求澄清 → Tavily 资料搜索 → `templates/ai.pptx` 模板选择 → 大纲 → 页面 Schema JSON → 配图生成及 MinIO 持久化，状态推进到 `RENDER`；**尚不生成或下载 PPT 文件**。需求不足时状态保留 `REQUIREMENT`；失败后可从上次完成的阶段恢复。修改已有 PPT 尚不可用。
+- `POST /api/ppt`：`{"conversationId":null,"message":"生成一份5页绿色能源科普PPT，面向大学生"}`，使用独立 PPT Agent；返回 `conversation`、阶段 `thinking`、流式 `delta` 和 `done`，失败时返回 `error`。流程包含需求澄清 → Tavily 资料搜索 → 模板选择 → 大纲 → 页面 Schema JSON → 配图生成及 MinIO 持久化 → Python 渲染 `.pptx` 文件并保存至 MinIO；完成后使用 `GET /api/ppt/conversations/{conversationId}/download` 下载。需求不足时状态保留 `REQUIREMENT`；失败后可从上次完成的阶段恢复。修改已有 PPT 尚不可用。
+- `POST /api/research`：`{"conversationId":null,"message":"研究中国储能行业的市场与主要挑战"}`，使用独立 DeepResearch Agent。先判断问题是否需要澄清；需要补充时流式发送暂停说明，等待下一轮提问。否则生成研究主题和检索计划（同 `order` 至多 3 项并行，组间串行），调用 Tavily MCP 搜索、评估证据并按反馈重规划，最多 `sprout.research.max-rounds` 轮（默认 3）；工作上下文超过 `sprout.research.context-char-limit` 字符（默认 50000）时压缩。最终报告以 `delta` 流式输出，参考资料以 `reference` 输出。`thinking` 为进度信息，与报告及来源一同存入会话历史；没有真实可引用资料时明确说明证据不足，不生成伪造报告。
 - `GET /api/ppt/conversations/{conversationId}`：读取最新 PPT 实例的状态、需求、搜索摘要、模板编码、大纲、`pptSchema` JSON 字符串和错误信息。没有 PPT 实例返回 404。图片 URL 指向 `GET /api/ppt/images/{id}`，由应用从私有 MinIO 返回有效图片；每成功上传一张图片就持久化一次 URL。已完成请求的消息也存入普通对话历史。
-- `PATCH /api/chat/{conversationId}/stop`：停止该会话正在运行的联网、文件或 PPT 任务，向原 SSE 发送 `stopped` 后结束；聊天 Agent 保存已生成的部分回答，PPT Agent 保留上一个持久化阶段，下次继续执行当前阶段。无运行任务时返回 404；同一实例内三种 Agent 共享任务管理器，同一会话同时只允许一个任务。任务状态保存在内存中，多实例部署时停止请求必须路由到执行该任务的实例。
-SSE 输出采用 Reactor `unicast().onBackpressureBuffer`，每个会话最多暂存 256 个事件；消费端跟不上时取消生成并让流以“客户端消费过慢，已停止生成”错误结束。聊天 Agent 保存已输出的部分答案，PPT Agent 只保留最近成功提交的阶段（不保存未完成阶段的分片）。缓冲上限只约束应用内的 SSE 队列。
+- `PATCH /api/chat/{conversationId}/stop`：停止该会话正在运行的任务，向原 SSE 发送 `stopped` 后结束。聊天 Agent 保存已生成的部分回答，PPT Agent 保留上一个持久化阶段；无运行任务返回 404。同一实例内所有 Agent 共享任务管理器，同一会话同时只允许一个任务；多实例部署时停止请求必须路由到执行该任务的实例。
+SSE 输出采用 Reactor `unicast().onBackpressureBuffer`，每个会话最多暂存 256 个事件；消费端跟不上时取消生成并让流以“客户端消费过慢，已停止生成”错误结束。聊天 Agent 保存已输出的部分答案，PPT Agent 只保留最近成功提交的阶段（不保存未完成阶段的分片）；研究任务停止后保留进度和已输出的部分报告。缓冲上限只约束应用内的 SSE 队列。
 - `GET /api/conversations?archived=true&query=关键词`：按状态与标题筛选最近 50 条，按 `updatedAt` 倒序；省略参数时仅返回未归档对话。
 - `PATCH /api/conversations/{id}/archive`、`PATCH /api/conversations/{id}/restore`：归档与恢复，均返回 204。
 - `PATCH /api/conversations/{id}/title`：请求 `{"title":"新标题"}`，去除首尾空格后须为 1–50 字符；重命名不改变最新消息时间。
@@ -63,9 +64,9 @@ SSE 输出采用 Reactor `unicast().onBackpressureBuffer`，每个会话最多�
 
 ## 代码结构
 
-`controller` 只处理 HTTP/SSE 和请求校验；`agents/BaseAgent` 承载聊天与文件 Agent 共用的流式 ReAct、会话记忆、持久化和停止流程。`agents/ppt/PptBuilderAgent` 独立调度 PPT 状态机，`PptStateStrategyFactory` 分派需求澄清、Tavily 信息收集、模板选择、大纲与 Schema 策略；`PptInstService` 管理 MySQL 断点，`PptImageService` 负责文生图和 MinIO 图片回填，`SimpleReactAgent` 手动执行搜索工具。`AgentTaskManager` 按会话管理三种 Agent 的运行任务；`UploadedFileService`、`FileVectorService` 负责文件与向量检索。各层位于 `src/main/java/com/sprout/agent/`。
+`controller` 只处理 HTTP/SSE 和请求校验；`agents/BaseAgent` 承载聊天与文件 Agent 共用的流式 ReAct、会话记忆、持久化和停止流程。`agents/deepResearch/DeepResearchAgent` 独立执行需求澄清、主题生成、检索计划、Tavily 搜索、评估与报告；`prompts/PlanExecutePrompts` 定义各阶段提示词。`agents/ppt/PptBuilderAgent` 调度 PPT 状态机，`PptInstService` 管理 MySQL 断点，`PptImageService` 负责配图回填，`PptRenderService` 调用 Python 脚本渲染文件。`AgentTaskManager` 按会话管理运行任务；`UploadedFileService`、`FileVectorService` 负责文件与向量检索。各层位于 `src/main/java/com/sprout/agent/`。
 
-`prompts/PptBuilderPrompts` 定义 Schema JSON 生成约束；`src/main/resources/templates/ai.pptx` 是当前模板，Apache POI 在启动时解析幻灯片的实际 shape 名称。`src/main/resources/python/render_ppt.py` 属于后续文件渲染阶段，当前未接入状态机。
+`prompts/PptBuilderPrompts` 定义 Schema JSON 生成约束；`src/main/resources/templates/ai.pptx` 是当前模板，Apache POI 在启动时解析幻灯片的实际 shape 名称。`src/main/resources/python/render_ppt.py` 负责生成最终 `.pptx` 文件。
 
 ## ZeroTier 服务
 

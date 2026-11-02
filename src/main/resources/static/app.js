@@ -11,12 +11,14 @@ const historyResults = document.querySelector('#history-results');
 const dialogueTab = document.querySelector('#dialogue-tab');
 const fileTab = document.querySelector('#file-tab');
 const pptTab = document.querySelector('#ppt-tab');
+const researchTab = document.querySelector('#research-tab');
 const fileControls = document.querySelector('#file-controls');
 const fileInput = document.querySelector('#file-input');
 const fileStatus = document.querySelector('#file-status');
 const composerHint = document.querySelector('.composer-hint');
 const pptDownload = document.querySelector('#ppt-download');
 const pptDownloadLink = document.querySelector('#ppt-download-link');
+const researchProgressPrefix = '深度研究进度\n';
 const renameIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m15 5 4 4M4 20l4.5-1 11-11a2.8 2.8 0 0 0-4-4l-11 11L4 20Z"/></svg>';
 const archiveIcon = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h16v4H4zM6 8v12h12V8M10 12h4"/></svg>';
 
@@ -168,19 +170,21 @@ function updateComposerState() {
   dialogueTab.disabled = isUploading || isSending;
   fileTab.disabled = isUploading || isSending;
   pptTab.disabled = isUploading || isSending;
+  researchTab.disabled = isUploading || isSending;
   fileControls.classList.toggle('disabled', fileInput.disabled);
   fileStatus.classList.toggle('error', !!fileError);
   fileControls.hidden = !fileMode;
-  for (const [tab, mode] of [[dialogueTab, 'dialogue'], [fileTab, 'file'], [pptTab, 'ppt']]) {
+  for (const [tab, mode] of [[dialogueTab, 'dialogue'], [fileTab, 'file'], [pptTab, 'ppt'], [researchTab, 'research']]) {
     const selected = assistantMode === mode;
     tab.classList.toggle('active', selected);
     if (selected) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }
-  promptInput.placeholder = assistantMode === 'ppt'
-    ? '描述 PPT 主题、页数、风格和受众…' : '给萌芽发消息…';
-  composerHint.textContent = assistantMode === 'ppt'
-    ? 'PPT 生成完成后可下载 .pptx 文件。' : '萌芽还在成长中，回答可能不够准确。';
+  promptInput.placeholder = assistantMode === 'ppt' ? '描述 PPT 主题、页数、风格和受众…'
+    : assistantMode === 'research' ? '描述要研究的问题、范围或目标…' : '给萌芽发消息…';
+  composerHint.textContent = assistantMode === 'ppt' ? 'PPT 生成完成后可下载 .pptx 文件。'
+    : assistantMode === 'research' ? '搜索资料并生成研究报告；可随时停止。'
+    : '萌芽还在成长中，回答可能不够准确。';
   fileStatus.textContent = isUploading ? `正在上传：${uploadingFileName}…`
     : fileError || (selectedFile ? `已选择：${selectedFile.name}` : '选择文件后即可向文件助手提问。');
   fileStatus.title = fileError || selectedFile?.name || uploadingFileName;
@@ -207,10 +211,13 @@ function renderConversation(conversation, isPpt = false) {
   welcome.hidden = conversation.messages.length > 0;
   for (const item of conversation.messages) {
     if (item.role === 'assistant' && item.thinking) {
-      if (isPpt) addPptProgress(item.thinking);
+      if (item.thinking.startsWith(researchProgressPrefix)) {
+        addPptProgress(item.thinking.slice(researchProgressPrefix.length), 'research');
+      } else if (isPpt) addPptProgress(item.thinking);
       else addThinking(item.thinking, false);
     }
-    if (!(isPpt && item.role === 'assistant' && isPptDownloadAnswer(item.text))) {
+    if (!(isPpt && item.role === 'assistant' && isPptDownloadAnswer(item.text))
+      && !(item.role === 'assistant' && item.thinking?.startsWith(researchProgressPrefix) && !item.text)) {
       addMessage(item.role, item.text, item.fileName);
     }
     if (item.role === 'assistant') addReferences(item.references);
@@ -229,16 +236,16 @@ function setPptDownload(id, ready) {
   else pptDownloadLink.removeAttribute('href');
 }
 
-function addPptProgress(initial = '') {
+function addPptProgress(initial = '', mode = 'ppt') {
   const section = document.createElement('section');
-  section.className = 'ppt-progress';
+  section.className = `ppt-progress${mode === 'research' ? ' research-progress' : ''}`;
   const heading = document.createElement('div');
   heading.className = 'ppt-progress-header';
-  heading.textContent = 'PPT 生成进度';
+  heading.textContent = mode === 'research' ? '深度研究进度' : 'PPT 生成进度';
   const log = document.createElement('div');
   log.className = 'ppt-progress-log';
   log.setAttribute('role', 'log');
-  log.setAttribute('aria-label', 'PPT 生成进度');
+  log.setAttribute('aria-label', heading.textContent);
   log.textContent = initial.trim();
   section.append(heading, log);
   messages.append(section);
@@ -283,6 +290,10 @@ async function openConversation(id) {
           break;
         }
       }
+    }
+    const lastAssistant = [...conversation.messages].reverse().find(item => item.role === 'assistant');
+    if (selectedModeToken === modeSelection && lastAssistant?.thinking?.startsWith(researchProgressPrefix)) {
+      assistantMode = 'research';
     }
     renderConversation(conversation);
     updateComposerState();
@@ -444,6 +455,7 @@ function addRecommendations(questions) {
 dialogueTab.addEventListener('click', () => setAssistantMode('dialogue'));
 fileTab.addEventListener('click', () => setAssistantMode('file'));
 pptTab.addEventListener('click', () => setAssistantMode('ppt'));
+researchTab.addEventListener('click', () => setAssistantMode('research'));
 
 fileInput.addEventListener('change', async () => {
   const file = fileInput.files[0];
@@ -504,7 +516,8 @@ form.addEventListener('submit', async (event) => {
 
   let searchStatus = null;
   let thinking = null;
-  let pptProgress = mode === 'ppt' && token === viewToken ? addPptProgress() : null;
+  let taskProgress = (mode === 'ppt' || mode === 'research') && token === viewToken
+    ? addPptProgress('', mode) : null;
   if (mode === 'ppt') setPptDownload(null, false);
   let thought = '';
   const finishThinking = () => {
@@ -514,7 +527,8 @@ form.addEventListener('submit', async (event) => {
     }
   };
   try {
-    const response = await fetch(mode === 'ppt' ? '/api/ppt' : attachment ? '/api/file-chat' : '/api/chat', {
+    const response = await fetch(mode === 'ppt' ? '/api/ppt'
+      : mode === 'research' ? '/api/research' : attachment ? '/api/file-chat' : '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
       signal: chatAbort.signal,
@@ -560,9 +574,12 @@ form.addEventListener('submit', async (event) => {
           thinking.section.scrollIntoView({ block: 'nearest' });
         }
         if ((name === 'thinking' || name === 'stage') && token === viewToken) {
-          if (mode === 'ppt') {
-            if (!pptProgress) pptProgress = addPptProgress();
-            appendPptProgress(pptProgress, data);
+          if (mode === 'ppt' || mode === 'research') {
+            if (!taskProgress) {
+              taskProgress = addPptProgress('', mode);
+              if (bubble) messages.insertBefore(taskProgress.section, bubble);
+            }
+            appendPptProgress(taskProgress, data);
           } else if (!searchStatus) searchStatus = addMessage('notice', data);
           else searchStatus.textContent = data;
         }
@@ -605,7 +622,8 @@ form.addEventListener('submit', async (event) => {
       if (done) break;
     }
     if (!completed) throw new Error('对话流提前中断');
-    if (mode === 'ppt' && bubble && (!answer.trim() || isPptDownloadAnswer(answer))) bubble.remove();
+    if (bubble && ((mode === 'ppt' && (!answer.trim() || isPptDownloadAnswer(answer)))
+      || (mode === 'research' && !answer.trim()))) bubble.remove();
     if (pptCompleted && token === viewToken && runningId) {
       try {
         const statusResponse = await fetch(`/api/ppt/conversations/${encodeURIComponent(runningId)}`);
