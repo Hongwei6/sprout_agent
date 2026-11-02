@@ -186,7 +186,7 @@ class DeepResearchAgentTest {
 
     private static final class Fixture {
         final ConversationService conversations = mock(ConversationService.class);
-        final AgentTaskManager tasks = new AgentTaskManager();
+        final AgentTaskManager tasks = com.sprout.agent.service.TestAgentTasks.newManager();
         final AtomicInteger plans = new AtomicInteger();
         final AtomicInteger critiques = new AtomicInteger();
         final AtomicReference<String> secondPlanContext = new AtomicReference<>("");

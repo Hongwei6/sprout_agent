@@ -18,6 +18,7 @@
 ```sh
 ./run.sh
 ```
+多实例任务管理依赖所有应用实例连接**同一个 Redis**，用于同会话互斥和跨实例停止。Redis 连接信息只放在 Nacos `sprout-agent-zerotier.yaml` 的 `spring.data.redis` 下：ZeroTier 地址 `10.244.0.111:6379`，数据库 `1`，密码由 Nacos 提供；仓库和本地 `.env` 不保存 Redis 密码。Redis 不可用时新任务无法注册；不回退到单机锁。Nacos 中的 Redis 密码仍属于敏感凭证，需限制读取权限；Nginx 转发 SSE 时需关闭 `proxy_buffering`，并将 `proxy_read_timeout` 设为长于任务可能的静默间隔。
 
 PPT 文件渲染使用项目内的 Python 脚本。首次运行先执行 `python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`；服务默认调用 `.venv/bin/python3`，其他部署路径可设置 `sprout.ppt.python`。渲染结果保存在 MinIO，完成后可通过 `GET /api/ppt/conversations/{conversationId}/download` 下载；旧任务停在 `RENDER` 时，发送“继续”即可生成文件。
 
@@ -44,7 +45,7 @@ PPT 每个阶段完成后更新 MySQL 状态；失败时记录失败阶段和原
 - `POST /api/ppt`：`{"conversationId":null,"message":"生成一份5页绿色能源科普PPT，面向大学生"}`，使用独立 PPT Agent；返回 `conversation`、阶段 `thinking`、流式 `delta` 和 `done`，失败时返回 `error`。流程包含需求澄清 → Tavily 资料搜索 → 模板选择 → 大纲 → 页面 Schema JSON → 配图生成及 MinIO 持久化 → Python 渲染 `.pptx` 文件并保存至 MinIO；完成后使用 `GET /api/ppt/conversations/{conversationId}/download` 下载。需求不足时状态保留 `REQUIREMENT`；失败后可从上次完成的阶段恢复。修改已有 PPT 尚不可用。
 - `POST /api/research`：`{"conversationId":null,"message":"研究中国储能行业的市场与主要挑战"}`，使用独立 DeepResearch Agent。先判断问题是否需要澄清；需要补充时流式发送暂停说明，等待下一轮提问。否则生成研究主题和检索计划（同 `order` 至多 3 项并行，组间串行），调用 Tavily MCP 搜索、评估证据并按反馈重规划，最多 `sprout.research.max-rounds` 轮（默认 3）；工作上下文超过 `sprout.research.context-char-limit` 字符（默认 50000）时压缩。最终报告以 `delta` 流式输出，参考资料以 `reference` 输出。`thinking` 为进度信息，与报告及来源一同存入会话历史；没有真实可引用资料时明确说明证据不足，不生成伪造报告。
 - `GET /api/ppt/conversations/{conversationId}`：读取最新 PPT 实例的状态、需求、搜索摘要、模板编码、大纲、`pptSchema` JSON 字符串和错误信息。没有 PPT 实例返回 404。图片 URL 指向 `GET /api/ppt/images/{id}`，由应用从私有 MinIO 返回有效图片；每成功上传一张图片就持久化一次 URL。已完成请求的消息也存入普通对话历史。
-- `PATCH /api/chat/{conversationId}/stop`：停止该会话正在运行的任务，向原 SSE 发送 `stopped` 后结束。聊天 Agent 保存已生成的部分回答，PPT Agent 保留上一个持久化阶段；无运行任务返回 404。同一实例内所有 Agent 共享任务管理器，同一会话同时只允许一个任务；多实例部署时停止请求必须路由到执行该任务的实例。
+- `PATCH /api/chat/{conversationId}/stop`：停止该会话正在运行的任务，向原 SSE 发送 `stopped` 后结束。聊天 Agent 保存已生成的部分回答，PPT Agent 保留上一个持久化阶段；无运行任务返回 404。所有实例共享 Redis 原子任务租约（30 分钟 TTL，运行中每 5 分钟续期），本机直接停止，其他实例通过 Redis Pub/Sub 广播停止。释放和续期均校验单次任务的租约标识，旧任务不能删除新任务。前端停止按钮通过该接口停止生成。
 SSE 输出采用 Reactor `unicast().onBackpressureBuffer`，每个会话最多暂存 256 个事件；消费端跟不上时取消生成并让流以“客户端消费过慢，已停止生成”错误结束。聊天 Agent 保存已输出的部分答案，PPT Agent 只保留最近成功提交的阶段（不保存未完成阶段的分片）；研究任务停止后保留进度和已输出的部分报告。缓冲上限只约束应用内的 SSE 队列。
 - `GET /api/conversations?archived=true&query=关键词`：按状态与标题筛选最近 50 条，按 `updatedAt` 倒序；省略参数时仅返回未归档对话。
 - `PATCH /api/conversations/{id}/archive`、`PATCH /api/conversations/{id}/restore`：归档与恢复，均返回 204。
@@ -64,7 +65,7 @@ SSE 输出采用 Reactor `unicast().onBackpressureBuffer`，每个会话最多�
 
 ## 代码结构
 
-`controller` 只处理 HTTP/SSE 和请求校验；`agents/BaseAgent` 承载聊天与文件 Agent 共用的流式 ReAct、会话记忆、持久化和停止流程。`agents/deepResearch/DeepResearchAgent` 独立执行需求澄清、主题生成、检索计划、Tavily 搜索、评估与报告；`prompts/PlanExecutePrompts` 定义各阶段提示词。`agents/ppt/PptBuilderAgent` 调度 PPT 状态机，`PptInstService` 管理 MySQL 断点，`PptImageService` 负责配图回填，`PptRenderService` 调用 Python 脚本渲染文件。`AgentTaskManager` 按会话管理运行任务；`UploadedFileService`、`FileVectorService` 负责文件与向量检索。各层位于 `src/main/java/com/sprout/agent/`。
+`controller` 只处理 HTTP/SSE 和请求校验；`agents/BaseAgent` 承载聊天与文件 Agent 共用的流式 ReAct、会话记忆、持久化和停止流程。`agents/deepResearch/DeepResearchAgent` 独立执行需求澄清、主题生成、检索计划、Tavily 搜索、评估与报告；`prompts/PlanExecutePrompts` 定义各阶段提示词。`agents/ppt/PptBuilderAgent` 调度 PPT 状态机，`PptInstService` 管理 MySQL 断点，`PptImageService` 负责配图回填，`PptRenderService` 调用 Python 脚本渲染文件。`service/AgentTaskManager` 使用 Redis 租约、停止广播和本地任务映射；`config/AgentTaskRedisConfiguration` 注册广播监听器。`UploadedFileService`、`FileVectorService` 负责文件与向量检索。
 
 `prompts/PptBuilderPrompts` 定义 Schema JSON 生成约束；`src/main/resources/templates/ai.pptx` 是当前模板，Apache POI 在启动时解析幻灯片的实际 shape 名称。`src/main/resources/python/render_ppt.py` 负责生成最终 `.pptx` 文件。
 

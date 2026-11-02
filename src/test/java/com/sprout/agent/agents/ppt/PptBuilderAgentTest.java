@@ -63,7 +63,7 @@ class PptBuilderAgentTest {
         }).toList();
         when(instances.getLatestInst(id)).thenReturn(inst);
         var agent = new PptBuilderAgent(conversations, instances, intents,
-                new PptStateStrategyFactory(strategies), templates, new AgentTaskManager(), builders, tools,
+                new PptStateStrategyFactory(strategies), templates, com.sprout.agent.service.TestAgentTasks.newManager(), builders, tools,
                 "test-key", "test-model");
         // The INIT transition is committed before the first stage is read.
         org.mockito.Mockito.doAnswer(invocation -> {
@@ -159,7 +159,7 @@ class PptBuilderAgentTest {
         });
         var agent = new PptBuilderAgent(conversations, instances, new PptIntentRecognizer(instances),
                 new PptStateStrategyFactory(List.of(outline, schema, new FailedStrategy())),
-                mock(PptTemplateCatalog.class), new AgentTaskManager(), builders, tools, "key", "model");
+                mock(PptTemplateCatalog.class), com.sprout.agent.service.TestAgentTasks.newManager(), builders, tools, "key", "model");
         List<ChatEvent> failed = agent.stream(id, "继续").collectList().block(Duration.ofSeconds(5));
         assertEquals(PptInstStatus.FAILED, inst.getStatus());
         assertEquals(PptInstStatus.OUTLINE, inst.getFailedStage());
@@ -184,7 +184,7 @@ class PptBuilderAgentTest {
         var builders = mock(ObjectProvider.class);
         var builder = mock(ChatClient.Builder.class);
         var tools = mock(SyncMcpToolCallbackProvider.class);
-        var tasks = new AgentTaskManager();
+        var tasks = com.sprout.agent.service.TestAgentTasks.newManager();
         String id = "d".repeat(32);
         AiPptInst inst = new AiPptInst();
         inst.setId(77L);
