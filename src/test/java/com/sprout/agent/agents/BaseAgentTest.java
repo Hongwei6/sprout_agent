@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 
+import static org.mockito.Mockito.when;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprout.agent.dto.SearchResult;
 import com.sprout.agent.entity.UploadedFileEntity;
@@ -54,9 +55,11 @@ class BaseAgentTest {
 
     @Test
     void agentsUseDistinctFileAndWebContexts() {
+        SyncMcpToolCallbackProvider provider = mock(SyncMcpToolCallbackProvider.class);
+        when(provider.getToolCallbacks()).thenReturn(new org.springframework.ai.tool.ToolCallback[0]);
         WebSearchReactAgent web = new WebSearchReactAgent(mock(ObjectProvider.class),
                 mock(ConversationService.class), mock(AgentTaskManager.class),
-                mock(UploadedFileService.class), new ObjectMapper(), mock(SyncMcpToolCallbackProvider.class),
+                mock(UploadedFileService.class), new ObjectMapper(), provider,
                 "api-key", "model", 5, 20, true);
         FileReactAgent files = new FileReactAgent(mock(ObjectProvider.class),
                 mock(ConversationService.class), mock(AgentTaskManager.class),
@@ -72,6 +75,8 @@ class BaseAgentTest {
         assertEquals("问题", web.prepareUserMessage("问题", null).getText());
         assertTrue(files.prepareUserMessage("问题", document).getText().contains("fileId"));
         assertFalse(files.prepareUserMessage("问题", document).getText().contains("附件内容"));
+        assertFalse(web.systemPrompt().contains("source-check"));
+        assertEquals(0, web.toolCallbacks(null).length);
         assertEquals(1, files.toolCallbacks(document).length);
         assertFalse(web.systemPrompt().contains("文件处理规则"));
     }

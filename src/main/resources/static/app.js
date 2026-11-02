@@ -12,6 +12,12 @@ const dialogueTab = document.querySelector('#dialogue-tab');
 const fileTab = document.querySelector('#file-tab');
 const pptTab = document.querySelector('#ppt-tab');
 const researchTab = document.querySelector('#research-tab');
+const skillsMenu = document.querySelector('#skills-menu');
+const skillsTab = document.querySelector('#skills-tab');
+const skillsList = document.querySelector('#skills-list');
+const selectedSkillBadge = document.querySelector('#selected-skill');
+const selectedSkillName = document.querySelector('#selected-skill-name');
+const clearSkillButton = document.querySelector('#clear-skill');
 const fileControls = document.querySelector('#file-controls');
 const fileInput = document.querySelector('#file-input');
 const fileStatus = document.querySelector('#file-status');
@@ -33,6 +39,7 @@ let activeArchived = false;
 let historyRequest = 0;
 let assistantMode = 'dialogue';
 let modeSelection = 0;
+let selectedSkill = null;
 let selectedFile = null;
 let isUploading = false;
 let uploadingFileName = '';
@@ -171,28 +178,79 @@ function updateComposerState() {
   fileTab.disabled = isUploading || isSending;
   pptTab.disabled = isUploading || isSending;
   researchTab.disabled = isUploading || isSending;
+  skillsMenu.classList.toggle('disabled', isUploading || isSending);
+  skillsTab.setAttribute('aria-disabled', String(isUploading || isSending));
   fileControls.classList.toggle('disabled', fileInput.disabled);
   fileStatus.classList.toggle('error', !!fileError);
   fileControls.hidden = !fileMode;
-  for (const [tab, mode] of [[dialogueTab, 'dialogue'], [fileTab, 'file'], [pptTab, 'ppt'], [researchTab, 'research']]) {
+  selectedSkillBadge.hidden = assistantMode !== 'skills' || !selectedSkill;
+  selectedSkillName.textContent = selectedSkill ? `@${selectedSkill}` : '';
+  for (const [tab, mode] of [[dialogueTab, 'dialogue'], [fileTab, 'file'], [pptTab, 'ppt'], [researchTab, 'research'], [skillsTab, 'skills']]) {
     const selected = assistantMode === mode;
     tab.classList.toggle('active', selected);
     if (selected) tab.setAttribute('aria-current', 'page');
     else tab.removeAttribute('aria-current');
   }
   promptInput.placeholder = assistantMode === 'ppt' ? '描述 PPT 主题、页数、风格和受众…'
-    : assistantMode === 'research' ? '描述要研究的问题、范围或目标…' : '给萌芽发消息…';
+    : assistantMode === 'research' ? '描述要研究的问题、范围或目标…'
+    : assistantMode === 'skills' ? (selectedSkill ? `描述要交给 @${selectedSkill} 的任务…` : '描述任务，或提供公开 HTTPS 技能地址请求安装…') : '给萌芽发消息…';
   composerHint.textContent = assistantMode === 'ppt' ? 'PPT 生成完成后可下载 .pptx 文件。'
     : assistantMode === 'research' ? '搜索资料并生成研究报告；可随时停止。'
+    : assistantMode === 'skills' ? '支持公开 HTTPS SKILL.md 或技能 ZIP；脚本仅在隔离、禁用网络的容器内运行。'
     : '萌芽还在成长中，回答可能不够准确。';
   fileStatus.textContent = isUploading ? `正在上传：${uploadingFileName}…`
     : fileError || (selectedFile ? `已选择：${selectedFile.name}` : '选择文件后即可向文件助手提问。');
   fileStatus.title = fileError || selectedFile?.name || uploadingFileName;
 }
 
+async function refreshSkills() {
+  skillsList.textContent = '正在加载技能…';
+  try {
+    const response = await fetch('/api/skills');
+    if (!response.ok) throw new Error('无法读取技能');
+    const skills = await response.json();
+    skillsList.replaceChildren();
+    const heading = document.createElement('strong');
+    heading.textContent = `已安装技能（${skills.length}）`;
+    skillsList.append(heading);
+    if (!skills.length) {
+      skillsList.append(document.createTextNode('暂无技能，可在对话中提供公开 HTTPS SKILL.md 或技能 ZIP 地址安装。'));
+      return;
+    }
+    const list = document.createElement('ul');
+    for (const skill of skills) {
+      const row = document.createElement('li');
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'skill-option';
+      button.title = `${skill.name}：${skill.description}`;
+      const name = document.createElement('b');
+      name.textContent = skill.name;
+      const description = document.createElement('span');
+      description.textContent = skill.description;
+      button.append(name, description);
+      button.addEventListener('click', () => {
+        if (isUploading || isSending) return;
+        setAssistantMode('skills');
+        selectedSkill = skill.name;
+        skillsMenu.open = false;
+        updateComposerState();
+        promptInput.focus();
+      });
+      row.append(button);
+      list.append(row);
+    }
+    skillsList.append(list);
+  } catch {
+    skillsList.textContent = '技能列表加载失败，请重新展开。';
+  }
+}
+
 function setAssistantMode(mode) {
   modeSelection += 1;
   assistantMode = mode;
+  if (mode !== 'skills') selectedSkill = null;
+  if (mode !== 'skills') skillsMenu.open = false;
   updateComposerState();
 }
 
@@ -367,8 +425,14 @@ function renderAnswer(bubble, text) {
 function addMessage(role, text, fileName) {
   const bubble = document.createElement('div');
   bubble.className = `message ${role}`;
+  const skillTag = role === 'user' && /^使用技能 @([A-Za-z0-9][A-Za-z0-9_-]*)\n/.exec(text);
   if (role === 'assistant') renderAnswer(bubble, text);
-  else bubble.textContent = text;
+  else if (skillTag) {
+    const badge = document.createElement('span');
+    badge.className = 'message-skill';
+    badge.textContent = `@${skillTag[1]}`;
+    bubble.append(badge, document.createTextNode(text.slice(skillTag[0].length)));
+  } else bubble.textContent = text;
   if (role === 'user' && fileName) {
     const attachment = document.createElement('small');
     attachment.className = 'message-attachment';
@@ -459,6 +523,16 @@ dialogueTab.addEventListener('click', () => setAssistantMode('dialogue'));
 fileTab.addEventListener('click', () => setAssistantMode('file'));
 pptTab.addEventListener('click', () => setAssistantMode('ppt'));
 researchTab.addEventListener('click', () => setAssistantMode('research'));
+skillsTab.addEventListener('click', (event) => {
+  if (isUploading || isSending) event.preventDefault();
+  else setAssistantMode('skills');
+});
+skillsMenu.addEventListener('toggle', () => { if (skillsMenu.open) refreshSkills(); });
+clearSkillButton.addEventListener('click', () => {
+  selectedSkill = null;
+  updateComposerState();
+  promptInput.focus();
+});
 
 fileInput.addEventListener('change', async () => {
   const file = fileInput.files[0];
@@ -499,14 +573,15 @@ form.addEventListener('submit', async (event) => {
   event.preventDefault();
   const text = promptInput.value.trim();
   const mode = assistantMode;
+  const message = mode === 'skills' && selectedSkill ? `使用技能 @${selectedSkill}\n${text}` : text;
   if (!text || isSending || activeArchived || (mode === 'file' && (isUploading || !selectedFile))) return;
-
+  if (mode === 'skills') skillsMenu.open = false;
   const requestedConversationId = activeId;
   const token = viewToken;
   const attachment = mode === 'file' ? selectedFile : null;
   isSending = true;
   welcome.hidden = true;
-  addMessage('user', text, attachment?.name);
+  const userBubble = addMessage('user', message, attachment?.name);
   promptInput.value = '';
   promptInput.style.height = 'auto';
   chatAbort = new AbortController();
@@ -531,12 +606,13 @@ form.addEventListener('submit', async (event) => {
   };
   try {
     const response = await fetch(mode === 'ppt' ? '/api/ppt'
-      : mode === 'research' ? '/api/research' : attachment ? '/api/file-chat' : '/api/chat', {
+      : mode === 'research' ? '/api/research'
+      : mode === 'skills' ? '/api/skills/chat' : attachment ? '/api/file-chat' : '/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
       signal: chatAbort.signal,
       body: JSON.stringify({
-        conversationId: requestedConversationId, message: text,
+        conversationId: requestedConversationId, message,
         ...(attachment ? { fileId: attachment.id } : {})
       })
     });
@@ -664,6 +740,7 @@ form.addEventListener('submit', async (event) => {
     chatAbort = null;
     runningId = null;
     isSending = false;
+    if (mode === 'skills' && skillsMenu.open) refreshSkills();
     updateComposerState();
   }
 });

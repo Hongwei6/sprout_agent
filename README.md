@@ -32,7 +32,13 @@ PPT 生成过程通过 SSE `thinking` 事件逐阶段推送；每张配图先由
 若文生图接口返回 `DataInspectionFailed`，系统会将上次被拒绝的描述交给对话模型重新改写，再生成图片；每张图最多调用文生图模型 3 次，三次均被拒绝才标记 `FAILED/SCHEMA` 并提示用户调整主题或配图要求。其他模型错误、改写失败或上传失败不重试。已保存的配图不会丢失；发送“继续”可从未完成的配图恢复，但服务商的输出图片审核仍可能拒绝新结果。
 PPT 每个阶段完成后更新 MySQL 状态；失败时记录失败阶段和原因，向 SSE 输出可读说明，并把说明与本轮进度写入会话。需求不完整会停在 `FAILED`（失败阶段 `REQUIREMENT`），补充需求后从澄清阶段恢复；其他失败发送“继续”或“重试”从失败阶段恢复，不重复已完成的配图。点击停止保留当前检查点，同会话再次发送“继续”即可恢复；明确要求“新建/重新生成”才创建新实例。已成功的 PPT 不会因“继续”重复生成。
 
-打开 <http://localhost:8080>。联网聊天使用 `POST /api/chat`，文件聊天先通过 `POST /api/files` 上传，再调用 `POST /api/file-chat` 并传入 `fileId`；PPT 使用 `POST /api/ppt`，深度研究使用 `POST /api/research`。接口均返回 `text/event-stream`（SSE）。
+打开 <http://localhost:8080>。联网聊天使用 `POST /api/chat`，文件聊天先通过 `POST /api/files` 上传，再调用 `POST /api/file-chat` 并传入 `fileId`；PPT 使用 `POST /api/ppt`，深度研究使用 `POST /api/research`，技能助手使用 `POST /api/skills/chat`。聊天接口均返回 `text/event-stream`（SSE）。
+
+技能助手在“深度研究”右侧；点击展开 `GET /api/skills` 返回的已安装技能列表，每个技能一行。点击技能后，输入框上方显示 `@技能名` 标签；输入任务并发送时，消息会携带该技能名，技能 Agent 先调用 `read_skill` 再处理任务。标签可移除，已发送的技能消息和历史记录也会显示标签。技能 Agent 独立于普通聊天和文件助手，提供 `read_skill`（按需加载完整指南）、`install_skill` 和 `run_skill_script` 三个专属工具，也可用 Tavily 搜索。自带 `source-check` 来源核验技能。`POST /api/skills/chat` 无需令牌，与 `/api/chat` 相同直接调用。
+
+**安装**：用户明确要求并提供公开 HTTPS 链接时，`install_skill` 可安装 GitHub 仓库首页/技能目录链接（下载仓库 ZIP，根据 `skillName` 精确选出技能并安装其完整目录，包括脚本；仓库只有一个技能时自动选中）、任意站点 `SKILL.md` 直链（只安装指南，技能名取自上级目录或 frontmatter `name`）或单技能 ZIP 包。例：让技能助手“安装 https://github.com/anthropics/skills 中的 pptx 技能”。防护：仅 HTTPS、无重定向、无查询串/用户信息/百分号编码，DNS 拒绝内网及保留地址（本机代理 fake-IP 198.18.0.0/15 允许，下载仍校验 TLS 域名），下载上限 5 MiB；独立 ZIP 至多 100 个条目，GitHub 仓库 ZIP 至多 5000 个条目、选中的技能至多 100 个文件/10 MiB；拒绝路径穿越、symlink 与非常规文件；`SKILL.md` ≤128 KiB；原子写入，失败回滚，不覆盖同名技能；安装后立即可用，无须重启。
+
+**脚本执行**：`run_skill_script` 仅能运行已安装技能目录内真实存在的 `.py` 脚本（拒绝越界路径与符号链接，单个字符串参数，无 shell），在本地 Docker `python:3.12-alpine` 容器中执行（需预先 `docker pull python:3.12-alpine`）：`--network none --read-only --cap-drop ALL --no-new-privileges --pids-limit 32 --memory 128m --cpus 0.5 --user 65534`，仅以只读方式挂载该技能目录，临时目录 noexec；超时约 12 秒、输出上限 16 KiB。技能不能获得宿主机命令、任意文件读写或其他语言运行时；系统提示词明确要求模型不得声称执行了未实际运行的脚本。技能目录必须可信且可写，多实例需共享该目录。当前没有用户登录，任何能访问本服务的访客都可以安装技能并运行沙箱脚本，仅限可信内网使用。
 
 每次请求根据 `conversationId` 从 MySQL 读取最近的问答，重建本次请求专属的 `MessageWindowChatMemory`；运行期消息列表单独承载当前问题、流式模型输出和工具调用结果。正常完成时保存当前问题、最终回答及回合明细；用户停止生成或客户端断开时，保存已经输出的部分回答（尚无文本则保存“回答已停止”），使下一轮“继续”可以读取原问题和已输出内容。模型或数据库异常仍不保存失败回合。重启或多实例请求可从数据库恢复历史；工具调用中间消息不注入下次模型上下文。
 
@@ -41,6 +47,7 @@ PPT 每个阶段完成后更新 MySQL 状态；失败时记录失败阶段和原
 - `DELETE /api/conversations/{id}`：删除对话
 - `POST /api/files`：`multipart/form-data`，表单字段名为 `file`；返回 `{"fileId":"32位小写十六进制","name":"文档.pdf","contentType":"application/pdf","size":12345}`（响应字段不因索引而改变）。支持 PDF、DOCX、UTF-8 TXT/MD、PNG/JPEG/WebP/GIF，最大 10 MiB；没有可提取文字的文档返回 400。上传的原文件存入 MinIO，文件元数据存入 MySQL；不超过 12000 字符的文档文字直接存于 MySQL，超过 12000 字符的文档按片段索引至 pgvector（`vector_file_info`），MySQL `uploaded_files.extracted_text` 留空。
 - `POST /api/chat`：`{"conversationId":null,"message":"你好"}`，使用联网搜索 Agent；新对话传 `null`，继续对话传已有 ID。
+- `GET /api/skills`：返回当前实例已安装的 `{name,description}` 列表。`POST /api/skills/chat`：请求体同 `/api/chat`，使用独立技能 Agent、会话记忆及 SSE，无需令牌。`install_skill` 可安装任意公开 HTTPS `SKILL.md`/技能 ZIP（见上文防护），`run_skill_script` 在禁网 Docker 容器内运行技能自带 Python 脚本。
 - `POST /api/file-chat`：`{"conversationId":null,"message":"请总结附件","fileId":"上传返回的fileId"}`，`fileId` 必填，使用文件 Agent。当前消息只提供附件名称和 fileId，不注入正文；模型必须先调用仅在文件 Agent 中可用的本地 `loadContent(fileId,question)`，才能基于返回内容回答。短文档由工具直接读取 MySQL 文本；已索引长文档按当前问题从 pgvector 检索最相关的 5 个片段，可用不同问题多次检索。图片首次提问时从 MinIO 读取，由 `SPROUT_VISION_BASE_URL` / `SPROUT_VISION_MODEL` 视觉模型识别并将描述存入 MySQL 的 `uploaded_files.extracted_text`；工具读取缓存的描述，后续提问（包括服务重启后）不再识别图片，仅首次识别推送 `thinking`。识别失败返回 `error`，不会存入虚构描述。两种聊天的 SSE 均发送 `conversation`、可选的 `reasoning`（模型推理文本分片）、可选的 `thinking`（工具状态）、`delta`、可选的 `reference`、可选的 `recommend` 和 `done`；异常发送 `error`。前端实时展示推理，正文开始或流结束时自动折叠；历史对话可再次展开。
 - `POST /api/ppt`：`{"conversationId":null,"message":"生成一份5页绿色能源科普PPT，面向大学生"}`，使用独立 PPT Agent；返回 `conversation`、阶段 `thinking`、流式 `delta` 和 `done`，失败时返回 `error`。流程包含需求澄清 → Tavily 资料搜索 → 模板选择 → 大纲 → 页面 Schema JSON → 配图生成及 MinIO 持久化 → Python 渲染 `.pptx` 文件并保存至 MinIO；完成后使用 `GET /api/ppt/conversations/{conversationId}/download` 下载。需求不足时状态保留 `REQUIREMENT`；失败后可从上次完成的阶段恢复。修改已有 PPT 尚不可用。
 - `POST /api/research`：`{"conversationId":null,"message":"研究中国储能行业的市场与主要挑战"}`，使用独立 DeepResearch Agent。先判断问题是否需要澄清；需要补充时流式发送暂停说明，等待下一轮提问。否则生成研究主题和检索计划（同 `order` 至多 3 项并行，组间串行），调用 Tavily MCP 搜索、评估证据并按反馈重规划，最多 `sprout.research.max-rounds` 轮（默认 3）；工作上下文超过 `sprout.research.context-char-limit` 字符（默认 50000）时压缩。最终报告以 `delta` 流式输出，参考资料以 `reference` 输出。`thinking` 为进度信息，与报告及来源一同存入会话历史；没有真实可引用资料时明确说明证据不足，不生成伪造报告。
@@ -53,9 +60,7 @@ SSE 输出采用 Reactor `unicast().onBackpressureBuffer`，每个会话最多�
 前端对流式回答及历史回答统一渲染 Markdown，渲染后的 HTML 经 DOMPurify 清理；用户输入仍按纯文本展示。Markdown 解析器和清理器从固定版本的 jsDelivr 加载，无法加载时回答退回纯文本。参考来源默认折叠，展开后鼠标悬停或键盘聚焦链接可预览摘要，点击链接在新标签页打开有效 HTTP(S) 来源。
 侧边栏只显示最近 50 条未归档对话，按最新消息时间倒序排列。每条标题右侧依次为重命名和归档按钮；输入新标题后按 Enter 保存、Esc 取消。历史对话窗口（移动端顶部历史按钮）也支持重命名、按标题搜索、归档和恢复。归档不删除消息，不改变最后消息时间；归档状态下不能继续发送，需先恢复。
 
-
-
-聊天使用流式 ReAct 轮次：识别工具调用、合并同一调用的参数分片、并发执行本轮可用的工具，并将工具结果（包括失败信息）回填当前上下文供下一轮推理；开始执行时推送 `thinking` 状态。联网 Agent 只提供 Tavily MCP 工具，文件 Agent 只提供本地 `loadContent` 工具；文件回合首次读取成功前强制工具调用，失败或没有可用内容时不凭空回答。无工具调用即结束；超过 `sprout.agent.max-rounds` 后不再提供工具，强制生成最终回答。默认最多 5 轮；设置为 0 表示不限制轮次。`sprout.agent.max-messages` 控制每次注入模型的历史消息数，必须为至少 2 的偶数；Nacos YAML 配置为 20（至多最近 10 轮完整问答），只限制推理窗口，不删除 MySQL 的完整历史。
+聊天使用流式 ReAct 轮次：识别工具调用、合并同一调用的参数分片、并发执行本轮可用的工具，并将工具结果（包括失败信息）回填当前上下文供下一轮推理；开始执行时推送 `thinking` 状态。联网 Agent 仅提供 Tavily MCP，技能 Agent 提供 Tavily MCP、`read_skill`、`install_skill` 与 `run_skill_script`，文件 Agent 只提供本地 `loadContent`；文件回合首次读取成功前强制工具调用，失败或没有可用内容时不凭空回答。无工具调用即结束；超过 `sprout.agent.max-rounds` 后不再提供工具，强制生成最终回答。默认最多 5 轮；设置为 0 表示不限制轮次。`sprout.agent.max-messages` 控制每次注入模型的历史消息数，必须为至少 2 的偶数；Nacos YAML 配置为 20（至多最近 10 轮完整问答），只限制推理窗口，不删除 MySQL 的完整历史。
 最终答案生成后，使用历史窗口、当前问题与完整回答进行一次非流式模型调用，生成恰好 3 个不同的推荐问题。默认启用，可用 `sprout.agent.enable-recommendations: false` 关闭；推荐仅用于展示和持久化，不进入后续对话的推理记忆。
 
 

@@ -259,7 +259,8 @@ public abstract class BaseAgent {
                     return new ToolOutcome(result, call.name().contains("tavily_search")
                             ? parseSearchResults(result, objectMapper) : List.of(), true);
                 } catch (Exception ex) {
-                    return new ToolOutcome("工具执行失败：" + ex.getClass().getSimpleName(), List.of(), false);
+                    return new ToolOutcome("工具执行失败：" + ex.getClass().getSimpleName()
+                            + (ex.getMessage() == null ? "" : "：" + ex.getMessage()), List.of(), false);
                 }
             }
         }
