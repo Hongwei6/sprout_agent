@@ -46,6 +46,7 @@ let uploadingFileName = '';
 let fileError = '';
 let uploadToken = 0;
 
+
 function renderHistory() {
   historyList.replaceChildren();
   for (const conversation of conversations) {
@@ -76,7 +77,7 @@ function renderHistory() {
         if (!response.ok) throw new Error('归档失败');
         if (activeId === conversation.id) startConversation();
         await refreshHistory();
-      } catch {
+      } catch (error) {
         addMessage('notice', '归档失败，请稍后重试。');
       }
     });
@@ -100,12 +101,19 @@ function editTitle(conversation, titleButton) {
     const title = input.value.trim();
     if (!title || title.length > 50) { input.setCustomValidity('标题长度必须为 1 到 50 个字符'); input.reportValidity(); return; }
     if (title === conversation.title) { cancel(); return; }
-    const response = await fetch(`/api/conversations/${conversation.id}/title`, {
-      method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title })
-    });
-    if (!response.ok) { input.setCustomValidity('保存失败，请重试'); input.reportValidity(); return; }
-    await refreshHistory();
-    if (historyDialog.open) searchHistory().catch(() => {});
+    try {
+      const response = await fetch(`/api/conversations/${conversation.id}/title`, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ title })
+      });
+      if (!response.ok) { input.setCustomValidity('保存失败，请重试'); input.reportValidity(); return; }
+      await refreshHistory();
+      if (historyDialog.open) searchHistory().catch((error) => {
+        historyResults.textContent = '无法查询历史对话';
+      });
+    } catch (error) {
+      input.setCustomValidity('保存失败，请重试');
+      input.reportValidity();
+    }
   });
   input.addEventListener('blur', cancel);
 }
@@ -148,19 +156,23 @@ async function searchHistory() {
     action.type = 'button';
     action.textContent = historyFilter.value === 'true' ? '恢复' : '归档';
     action.addEventListener('click', async () => {
-      const archived = historyFilter.value !== 'true';
-      const response = await fetch(`/api/conversations/${conversation.id}/${archived ? 'archive' : 'restore'}`,
-        { method: 'PATCH' });
-      if (!response.ok) {
+      try {
+        const archived = historyFilter.value !== 'true';
+        const response = await fetch(`/api/conversations/${conversation.id}/${archived ? 'archive' : 'restore'}`,
+          { method: 'PATCH' });
+        if (!response.ok) {
+          historyResults.textContent = '操作失败，请重试。';
+          return;
+        }
+        if (activeId === conversation.id) {
+          if (archived) startConversation();
+          else activeArchived = false;
+          updateComposerState();
+        }
+        await Promise.all([refreshHistory(), searchHistory()]);
+      } catch (error) {
         historyResults.textContent = '操作失败，请重试。';
-        return;
       }
-      if (activeId === conversation.id) {
-        if (archived) startConversation();
-        else activeArchived = false;
-        updateComposerState();
-      }
-      await Promise.all([refreshHistory(), searchHistory()]);
     });
     row.append(title, date, rename, action);
     historyResults.append(row);
@@ -196,7 +208,7 @@ function updateComposerState() {
     : assistantMode === 'skills' ? (selectedSkill ? `描述要交给 @${selectedSkill} 的任务…` : '描述任务，或提供公开 HTTPS 技能地址请求安装…') : '给萌芽发消息…';
   composerHint.textContent = assistantMode === 'ppt' ? 'PPT 生成完成后可下载 .pptx 文件。'
     : assistantMode === 'research' ? '搜索资料并生成研究报告；可随时停止。'
-    : assistantMode === 'skills' ? '支持公开 HTTPS SKILL.md 或技能 ZIP；脚本仅在隔离、禁用网络的容器内运行。'
+    : assistantMode === 'skills' ? '技能助手可使用宿主机 bash 运行脚本并将成品保存到指定目录。'
     : '萌芽还在成长中，回答可能不够准确。';
   fileStatus.textContent = isUploading ? `正在上传：${uploadingFileName}…`
     : fileError || (selectedFile ? `已选择：${selectedFile.name}` : '选择文件后即可向文件助手提问。');
@@ -355,8 +367,10 @@ async function openConversation(id) {
     }
     renderConversation(conversation);
     updateComposerState();
-  } catch {
-    if (token === viewToken) startConversation();
+  } catch (error) {
+    if (token === viewToken) {
+      startConversation();
+    }
     return;
   }
   try {
@@ -802,7 +816,7 @@ document.querySelector('#clear-chat').addEventListener('click', async () => {
     if (!response.ok) throw new Error('无法删除对话');
     if (activeId === id) startConversation();
     await refreshHistory();
-  } catch {
+  } catch (error) {
     if (activeId === id) addMessage('notice', '删除对话失败，请稍后重试。');
   }
 });

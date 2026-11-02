@@ -5,3 +5,4 @@ target/
 .env
 __pycache__/
 .venv/
+agent-workspace/

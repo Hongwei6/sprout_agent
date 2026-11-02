@@ -103,6 +103,11 @@
       <version>${reactor.version}</version>
     </dependency>
     <dependency>
+      <groupId>com.google.re2j</groupId>
+      <artifactId>re2j</artifactId>
+      <version>1.8</version>
+    </dependency>
+    <dependency>
       <groupId>com.alibaba.cloud</groupId>
       <artifactId>spring-cloud-starter-alibaba-nacos-config</artifactId>
       <version>2025.0.0.0</version>

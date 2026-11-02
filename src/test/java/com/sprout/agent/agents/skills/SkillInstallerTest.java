@@ -153,9 +153,19 @@ class SkillInstallerTest {
                 new SkillInstaller(registry), "api-key", "model", 5, 20, true);
         assertEquals("read_skill", agent.toolCallbacks(null)[0].getToolDefinition().name());
         assertEquals("install_skill", agent.toolCallbacks(null)[1].getToolDefinition().name());
-        assertEquals("run_skill_script", agent.toolCallbacks(null)[2].getToolDefinition().name());
-        assertTrue(agent.systemPrompt().contains("不能执行宿主机命令"));
+        assertTrue(java.util.Arrays.stream(agent.toolCallbacks(null))
+                .anyMatch(tool -> tool.getToolDefinition().name().equals("run_skill_script")));
+        assertTrue(java.util.Arrays.stream(agent.toolCallbacks(null))
+                .anyMatch(tool -> tool.getToolDefinition().name().equals("run_python")));
+        for (String name : java.util.List.of("read_file", "write_file", "edit_file", "list_files",
+                "glob_files", "grep", "bash")) {
+            assertTrue(java.util.Arrays.stream(agent.toolCallbacks(null))
+                    .anyMatch(tool -> tool.getToolDefinition().name().equals(name)), name);
+        }
+        assertTrue(agent.systemPrompt().contains("宿主机绝对路径"));
+        assertTrue(agent.systemPrompt().contains("直接在宿主机"));
     }
+
 
     private static byte[] archive(Map<String, String> entries) throws Exception {
         ByteArrayOutputStream output = new ByteArrayOutputStream();

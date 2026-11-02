@@ -11,8 +11,9 @@ import java.util.concurrent.TimeUnit;
 import org.springframework.ai.tool.annotation.Tool;
 import org.springframework.ai.tool.annotation.ToolParam;
 
-/** Only Python scripts from installed skills run, inside a locked-down Docker container. */
+/** Runs installed or generated Python code only in a locked-down Docker container. */
 public final class RunSkillScriptTool {
+    private static final int MAX_CODE_BYTES = 16 * 1024;
     private static final int MAX_OUTPUT = 16 * 1024;
     private final SkillRegistry registry;
     private final Launcher launcher;
@@ -53,16 +54,39 @@ public final class RunSkillScriptTool {
         try {
             Path mount = root.toRealPath();
             if (!file.toRealPath().startsWith(mount)) throw new IllegalArgumentException("脚本超出技能目录");
-            List<String> command = new ArrayList<>(List.of("docker", "run", "--rm", "--pull", "never",
-                    "--network", "none", "--read-only", "--cap-drop", "ALL",
-                    "--security-opt", "no-new-privileges", "--pids-limit", "32",
-                    "--memory", "128m", "--memory-swap", "128m", "--cpus", "0.5", "--user", "65534:65534",
-                    "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env", "HOME=/tmp",
-                    "--env", "PYTHONDONTWRITEBYTECODE=1",
-                    "--mount", "type=bind,src=" + mount + ",dst=/skill,readonly",
+            List<String> command = sandboxCommand();
+            command.addAll(List.of("--mount", "type=bind,src=" + mount + ",dst=/skill,readonly",
                     "--workdir", "/skill", "python:3.12-alpine", "timeout", "-s", "KILL", "12",
                     "python", "-I", "-B", "/skill/" + script));
             if (!argument.isEmpty()) command.add(argument);
+            return execute(command);
+        } catch (IOException ex) {
+            throw new IllegalStateException("无法访问技能脚本", ex);
+        }
+    }
+
+    @Tool(name = "run_python", description = "直接在禁网、限资源的临时 Docker 容器执行本次生成的 Python 代码；无需保存成技能文件，不需用户额外授权。只能通过标准输出返回文本，不能读写宿主机文件。")
+    public String runCode(@ToolParam(description = "完整的 Python 3 代码，使用 print 输出结果；不支持 shell 命令") String code) {
+        if (code == null || code.isBlank() || code.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_CODE_BYTES) {
+            throw new IllegalArgumentException("Python 代码必须非空且不超过 16 KiB");
+        }
+        List<String> command = sandboxCommand();
+        command.addAll(List.of("--workdir", "/tmp", "python:3.12-alpine", "timeout", "-s", "KILL", "12",
+                "python", "-I", "-B", "-c", code));
+        return execute(command);
+    }
+
+    private static List<String> sandboxCommand() {
+        return new ArrayList<>(List.of("docker", "run", "--rm", "--pull", "never",
+                "--network", "none", "--read-only", "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges", "--pids-limit", "32",
+                "--memory", "128m", "--memory-swap", "128m", "--cpus", "0.5", "--user", "65534:65534",
+                "--tmpfs", "/tmp:rw,noexec,nosuid,size=16m", "--env", "HOME=/tmp",
+                "--env", "PYTHONDONTWRITEBYTECODE=1"));
+    }
+
+    private String execute(List<String> command) {
+        try {
             Process process = launcher.start(command);
             try {
                 var output = java.util.concurrent.CompletableFuture.supplyAsync(() -> {

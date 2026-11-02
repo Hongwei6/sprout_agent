@@ -51,6 +51,30 @@ class RunSkillScriptToolTest {
         assertFalse(command.contains("sh"));
     }
     @Test
+    void generatedCodeRunsWithoutSkillMountOrHostAccess() throws Exception {
+        AtomicReference<List<String>> invoked = new AtomicReference<>();
+        Process process = mock(Process.class);
+        when(process.getInputStream()).thenReturn(new ByteArrayInputStream("4\n".getBytes()));
+        when(process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)).thenReturn(true);
+        when(process.exitValue()).thenReturn(0);
+        RunSkillScriptTool tool = new RunSkillScriptTool(new SkillRegistry(directory), command -> {
+            invoked.set(command);
+            return process;
+        });
+        String code = "print(2 + 2)";
+        assertEquals("退出码 0：\n4\n", tool.runCode(code));
+        List<String> command = invoked.get();
+        assertEquals(List.of("python", "-I", "-B", "-c", code), command.subList(command.size() - 5, command.size()));
+        assertTrue(command.containsAll(List.of("--network", "none", "--read-only", "--cap-drop", "ALL",
+                "--memory", "128m", "--pids-limit", "32", "--user", "65534:65534", "--tmpfs")));
+        assertFalse(command.contains("--mount"));
+        assertFalse(command.contains("sh"));
+        for (String invalid : List.of("", " ", "x".repeat(16 * 1024 + 1))) {
+            assertThrows(IllegalArgumentException.class, () -> tool.runCode(invalid));
+        }
+    }
+
+    @Test
     void capsOutputAndExecutionTime() throws Exception {
         SkillRegistry registry = new SkillRegistry(directory);
         registry.installArchive("review", java.util.Map.of("SKILL.md", "Review notes".getBytes(),

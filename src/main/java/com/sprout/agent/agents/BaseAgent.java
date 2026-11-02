@@ -208,9 +208,6 @@ public abstract class BaseAgent {
                     turn.file != null && !turn.fileToolSucceeded ? "未能读取附件内容，无法基于文件回答。" : state.text.toString(),
                     turn);
         }
-        if (maxRounds > 0 && round >= maxRounds && (turn.file == null || turn.fileToolSucceeded)) {
-            return forceFinalStream(client, messages, conversationId, question, turn);
-        }
         messages.add(AssistantMessage.builder().content(state.text.toString()).toolCalls(state.toolCalls).build());
         AtomicReferenceArray<ToolOutcome> outcomes = new AtomicReferenceArray<>(state.toolCalls.size());
         return Flux.range(0, state.toolCalls.size())
