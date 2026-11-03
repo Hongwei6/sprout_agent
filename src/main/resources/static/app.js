@@ -280,7 +280,14 @@ function renderConversation(conversation, isPpt = false) {
   messages.replaceChildren();
   welcome.hidden = conversation.messages.length > 0;
   for (const item of conversation.messages) {
-    if (item.role === 'assistant' && item.thinking) {
+    if (item.role === 'assistant' && Array.isArray(item.timeline) && item.timeline.length) {
+      const timeline = addSkillTimeline(false);
+      for (const entry of item.timeline) appendSkillTimeline(timeline, entry);
+      flushSkillTimeline(timeline);
+      timeline.section.open = item.timeline.some(entry => entry.type === 'error')
+        || [...timeline.tools.values()].some(row => row.dataset.status !== 'success');
+      timeline.heading.textContent = timeline.section.open ? '技能执行记录（需关注）' : '技能执行记录';
+    } else if (item.role === 'assistant' && item.thinking) {
       if (item.thinking.startsWith(researchProgressPrefix)) {
         addPptProgress(item.thinking.slice(researchProgressPrefix.length), 'research');
       } else if (isPpt) addPptProgress(item.thinking);
@@ -472,6 +479,84 @@ function addThinking(text, open = true) {
   return { section, heading, content };
 }
 
+function addSkillTimeline(open = true) {
+  const section = document.createElement('details');
+  section.className = 'skill-timeline';
+  section.open = open;
+  const heading = document.createElement('summary');
+  heading.textContent = open ? '正在执行技能…' : '技能执行记录';
+  const log = document.createElement('div');
+  log.className = 'skill-timeline-log';
+  log.setAttribute('role', 'log');
+  log.setAttribute('aria-label', '技能执行步骤');
+  log.setAttribute('aria-live', 'polite');
+  log.setAttribute('aria-relevant', 'additions text');
+  section.append(heading, log);
+  messages.append(section);
+  return { section, heading, log, tools: new Map(), currentThought: null, queue: [], scheduled: 0, follow: open };
+}
+
+function appendSkillTimeline(panel, entry) {
+  panel.queue.push(entry);
+  if (!panel.scheduled) {
+    panel.scheduled = requestAnimationFrame(() => {
+      panel.scheduled = 0;
+      flushSkillTimeline(panel);
+    });
+  }
+}
+
+function flushSkillTimeline(panel) {
+  if (panel.scheduled) {
+    cancelAnimationFrame(panel.scheduled);
+    panel.scheduled = 0;
+  }
+  if (!panel.queue.length) return;
+  const sticky = panel.log.scrollHeight - panel.log.scrollTop - panel.log.clientHeight < 48;
+  const entries = panel.queue.splice(0);
+  for (const entry of entries) {
+    if (entry.type === 'thinking' && typeof entry.content === 'string') {
+      if (!panel.currentThought) {
+        panel.currentThought = document.createElement('div');
+        panel.currentThought.className = 'skill-timeline-thinking';
+        panel.log.append(panel.currentThought);
+      }
+      panel.currentThought.textContent += entry.content;
+    } else if (entry.type === 'tool' && typeof entry.toolName === 'string') {
+      panel.currentThought = null;
+      const id = String(entry.toolCallId ?? '');
+      let row = panel.tools.get(id);
+      if (!row) {
+        row = document.createElement('div');
+        row.className = 'skill-timeline-tool';
+        const icon = document.createElement('span');
+        icon.className = 'skill-timeline-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        const label = document.createElement('span');
+        label.className = 'skill-timeline-label';
+        const status = document.createElement('span');
+        status.className = 'skill-timeline-status';
+        row.append(icon, label, status);
+        panel.log.append(row);
+        panel.tools.set(id, row);
+      }
+      const state = ['running', 'success', 'error'].includes(entry.status) ? entry.status : 'error';
+      row.dataset.status = state;
+      row.querySelector('.skill-timeline-label').textContent = entry.toolName;
+      row.querySelector('.skill-timeline-status').textContent =
+        state === 'running' ? '执行中' : state === 'success' ? '已完成' : '执行失败';
+    } else if (entry.type === 'error' && typeof entry.message === 'string') {
+      panel.currentThought = null;
+      const notice = document.createElement('div');
+      notice.className = 'skill-timeline-error';
+      notice.textContent = entry.message;
+      panel.log.append(notice);
+    }
+  }
+  if (sticky) panel.log.scrollTop = panel.log.scrollHeight;
+  if (panel.follow) panel.section.scrollIntoView({ block: 'nearest' });
+}
+
 function addReferences(references) {
   if (!Array.isArray(references)) return;
   const section = document.createElement('details');
@@ -607,15 +692,47 @@ form.addEventListener('submit', async (event) => {
   updateComposerState();
 
   let searchStatus = null;
+  const skillTimeline = mode === 'skills' && token === viewToken ? addSkillTimeline() : null;
+  let skillHasError = false;
+  let skillBubble = null;
   let thinking = null;
   let taskProgress = (mode === 'ppt' || mode === 'research') && token === viewToken
     ? addPptProgress('', mode) : null;
   if (mode === 'ppt') setPptDownload(null, false);
-  let thought = '';
+  const flushThinkingText = () => {
+    if (!thinking || !thinking.pending) return;
+    if (thinking.frame) {
+      cancelAnimationFrame(thinking.frame);
+      thinking.frame = 0;
+    }
+    const box = thinking.content;
+    const sticky = box.scrollHeight - box.scrollTop - box.clientHeight < 48;
+    box.textContent += thinking.pending;
+    thinking.pending = '';
+    if (sticky) box.scrollTop = box.scrollHeight;
+    thinking.section.scrollIntoView({ block: 'nearest' });
+  };
   const finishThinking = () => {
     if (thinking) {
+      flushThinkingText();
       thinking.section.open = false;
       thinking.heading.textContent = '思考过程';
+    }
+  };
+  let bubble = null;
+  let answer = '';
+  let answerRendered = '';
+  let answerFrame = 0;
+  const flushAnswerText = () => {
+    if (answerFrame) {
+      cancelAnimationFrame(answerFrame);
+      answerFrame = 0;
+    }
+    if (bubble && answer !== answerRendered) {
+      answerRendered = answer;
+      renderAnswer(bubble, answer);
+      if (mode === 'skills') bubble.hidden = false;
+      bubble.scrollIntoView({ block: 'nearest' });
     }
   };
   try {
@@ -631,8 +748,9 @@ form.addEventListener('submit', async (event) => {
       })
     });
     if (!response.ok || !response.body) throw new Error('无法开始对话');
-    const bubble = token === viewToken ? addMessage('assistant', '') : null;
-    let answer = '';
+    bubble = token === viewToken ? addMessage('assistant', '') : null;
+    if (mode === 'skills' && bubble) bubble.hidden = true;
+    if (mode === 'skills') skillBubble = bubble;
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
@@ -658,15 +776,37 @@ form.addEventListener('submit', async (event) => {
           }
         }
         if (name === 'reasoning' && token === viewToken) {
-          if (!thinking) {
-            thinking = addThinking('', true);
-            if (bubble) messages.insertBefore(thinking.section, bubble);
+          if (mode === 'skills') {
+            appendSkillTimeline(skillTimeline, { type: 'thinking', content: data });
+          } else {
+            if (!thinking) {
+              thinking = addThinking('', true);
+              if (bubble) messages.insertBefore(thinking.section, bubble);
+            }
+            thinking.pending = (thinking.pending || '') + data;
+            if (!thinking.frame) {
+              thinking.frame = requestAnimationFrame(() => {
+                thinking.frame = 0;
+                flushThinkingText();
+              });
+            }
           }
-          thought += data;
-          thinking.content.textContent = thought;
-          thinking.section.scrollIntoView({ block: 'nearest' });
         }
-        if ((name === 'thinking' || name === 'stage') && token === viewToken) {
+        if (mode === 'skills' && skillTimeline && token === viewToken
+          && (name === 'tool_start' || name === 'tool_end' || name === 'stage_error')) {
+          const stage = JSON.parse(data);
+          if (name === 'stage_error') {
+            skillHasError = true;
+            appendSkillTimeline(skillTimeline, { type: 'error', message: stage.message });
+          } else {
+            const status = name === 'tool_start' ? 'running' : stage.status;
+            if (status === 'error') skillHasError = true;
+            appendSkillTimeline(skillTimeline, {
+              type: 'tool', toolCallId: stage.toolCallId, toolName: stage.toolName, status
+            });
+          }
+        }
+        if ((name === 'thinking' || name === 'stage') && mode !== 'skills' && token === viewToken) {
           if (mode === 'ppt' || mode === 'research') {
             if (!taskProgress) {
               taskProgress = addPptProgress('', mode);
@@ -677,16 +817,18 @@ form.addEventListener('submit', async (event) => {
           else searchStatus.textContent = data;
         }
         if (name === 'delta' && bubble) {
-          finishThinking();
+          if (mode !== 'skills') finishThinking();
           if (searchStatus) {
             searchStatus.remove();
             searchStatus = null;
           }
           answer += data;
           if (!(mode === 'ppt' && ('[下载 PPT 文件]'.startsWith(answer)
-            || answer.startsWith('[下载 PPT 文件](')))) {
-            renderAnswer(bubble, answer);
-            bubble.scrollIntoView({ block: 'nearest' });
+            || answer.startsWith('[下载 PPT 文件]('))) && !answerFrame) {
+            answerFrame = requestAnimationFrame(() => {
+              answerFrame = 0;
+              flushAnswerText();
+            });
           }
         }
         if (name === 'reference' && token === viewToken) {
@@ -700,12 +842,26 @@ form.addEventListener('submit', async (event) => {
           const recommendation = JSON.parse(data);
           if (recommendation.type === 'recommend') addRecommendations(recommendation.content);
         }
+        if (name === 'complete' && skillTimeline) {
+          flushSkillTimeline(skillTimeline);
+          if (!skillTimeline.log.hasChildNodes()) skillTimeline.section.remove();
+          else {
+            skillTimeline.section.open = skillHasError;
+            skillTimeline.heading.textContent = skillHasError ? '技能执行记录（需关注）' : '技能执行记录';
+          }
+        }
         if (name === 'stopped' || name === 'done') finishThinking();
         if (name === 'stopped') {
           if (searchStatus) searchStatus.remove();
+          if (skillTimeline) {
+            flushSkillTimeline(skillTimeline);
+            appendSkillTimeline(skillTimeline, { type: 'error', message: '已停止生成' });
+            flushSkillTimeline(skillTimeline);
+            skillTimeline.section.open = true;
+            skillTimeline.heading.textContent = '技能执行记录（已停止）';
+          }
           completed = true;
         }
-        if (name === 'error') throw new Error(data);
         if (name === 'done') {
           if (searchStatus) searchStatus.remove();
           completed = true;
@@ -714,9 +870,11 @@ form.addEventListener('submit', async (event) => {
       }
       if (done) break;
     }
+    flushAnswerText();
+    if (skillTimeline) flushSkillTimeline(skillTimeline);
     if (!completed) throw new Error('对话流提前中断');
     if (bubble && ((mode === 'ppt' && (!answer.trim() || isPptDownloadAnswer(answer)))
-      || (mode === 'research' && !answer.trim()))) bubble.remove();
+      || (mode === 'research' && !answer.trim()) || (mode === 'skills' && !answer.trim()))) bubble.remove();
     if (pptCompleted && token === viewToken && runningId) {
       try {
         const statusResponse = await fetch(`/api/ppt/conversations/${encodeURIComponent(runningId)}`);
@@ -741,8 +899,18 @@ form.addEventListener('submit', async (event) => {
     if (token === viewToken) refreshHistory().catch(() => {});
   } catch (error) {
     finishThinking();
+    flushAnswerText();
     if (searchStatus) searchStatus.remove();
-    if (token === viewToken && !(stopPending && error.name === 'AbortError')) {
+    if (skillTimeline) {
+      if (skillBubble && !skillBubble.textContent.trim()) skillBubble.remove();
+      appendSkillTimeline(skillTimeline, {
+        type: 'error',
+        message: stopPending && error.name === 'AbortError'
+          ? '已停止生成' : error.message || '无法连接萌芽服务，请稍后重试。'
+      });
+      skillTimeline.section.open = true;
+      skillTimeline.heading.textContent = '技能执行记录（需关注）';
+    } else if (token === viewToken && !(stopPending && error.name === 'AbortError')) {
       addMessage('notice', error.message || '无法连接萌芽服务，请稍后重试。');
     }
   } finally {

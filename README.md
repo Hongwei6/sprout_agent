@@ -40,7 +40,10 @@ PPT 每个阶段完成后更新 MySQL 状态；失败时记录失败阶段和原
 
 **宿主机文件和命令**：普通聊天与技能 Agent 默认无需令牌即可使用 `read_file`、`write_file`（仅新建）、`edit_file`（唯一匹配或显式全部替换）、`list_files`、`glob_files`、`grep`（线性时间 RE2 正则）访问服务账号有权限的宿主机**绝对路径**；文件大小、搜索范围和输出仍有限制。文件工具在支持的文件系统用安全目录句柄访问，macOS 使用 `/usr/bin/python3` 的固定 `openat`/`O_NOFOLLOW` 辅助程序。两种聊天的 `bash` 均直接在宿主机执行 `/bin/bash -lc`，可指定宿主机绝对工作目录、运行生成的脚本和系统命令，默认工作目录为服务进程当前目录；单次命令最多运行 120 秒，输出最多 100 KB。技能 Agent 的 `run_python` 和 `run_skill_script` 仍在隔离 Docker 容器中运行（需预先 `docker pull python:3.12-alpine`）。
 
-技能助手生成 `.pptx` 时先读取已安装的 `pptx` 技能，写入并执行生成脚本，校验成品文件后才报告完成；脚本本身不是交付物。技能助手默认最多执行 12 轮工具调用（`sprout.agent.skills.max-rounds` 可调整），最后一轮的工具调用仍会执行再结束。
+技能助手生成 `.pptx` 时先读取已安装的 `pptx` 技能，写入并执行生成脚本，校验成品文件后才报告完成；脚本本身不是交付物。技能助手默认最多执行 24 轮工具调用（`sprout.agent.skills.max-rounds` 可调整）；工具失败时，最多额外获得 6 轮恢复机会。失败输出（含退出码）会传给模型，模型应评估是否修正命令、切换方案或明确说明无法继续，而不是原样重跑有副作用的命令；达到上限后不再调用工具。模型接口异常的重试与工具失败的恢复轮次互不相同。
+技能助手的分阶段流式输出沿用 `conversation`、`reasoning`、`delta`、`reference`、`recommend`、`done`，另外推送 `tool_start`（`{"toolCallId":"…","toolName":"…"}`）、`tool_end`（额外包含 `status:"success"|"error"`）、模型调用重试时的 `stage_error`（`{"code":"LLM_RETRY","message":"…"}`）以及成功结束时位于 `done` 前的 `complete`。工具开始事件先于执行发送，成功或失败都会发送结束事件；事件不包含工具参数及执行结果，以免在浏览器泄露敏感信息。模型调用在尚未输出正文时最多重试 3 次，每次间隔 10 秒；已经输出正文则不重试，以免重复答案。最终失败仍按原协议发送 `error`，不会发送 `complete`。
+
+技能助手前端将思考、工具状态和重试提示放进同一个时间线：执行时展开，正常完成后折叠，失败或停止时保持展开。流式思考、时间线和回答正文的 DOM 更新按动画帧合并；思考框与时间线在停留于底部时自动跟随最新内容，用户向上滚动查看历史时暂停跟随、回到底部后恢复。技能回合的时间线与原有工具调用明细保存在 `chat_turn_details.tools_json`；历史接口仅返回时间线，不向浏览器返回工具参数和结果。其他 Agent 的 SSE 及展示不变。
 
 **安全边界**：这是未认证的宿主机命令与文件读写接口；任何能访问应用的人都能以服务账号身份运行命令、联网以及读写配置、项目和密钥文件。仅在可信用户可访问的隔离网络中部署，公开部署前必须增加身份认证。读取内容会进入模型上下文，回答和工具调用明细可能写入 MySQL；技能文档及网页内容也可能诱导模型运行无关命令。多实例命令与文件访问只作用于承载该请求的实例。
 
@@ -49,7 +52,7 @@ PPT 每个阶段完成后更新 MySQL 状态；失败时记录失败阶段和原
 每次请求根据 `conversationId` 从 MySQL 读取最近的问答，重建本次请求专属的 `MessageWindowChatMemory`；运行期消息列表单独承载当前问题、流式模型输出和工具调用结果。正常完成时保存当前问题、最终回答及回合明细；用户停止生成或客户端断开时，保存已经输出的部分回答（尚无文本则保存“回答已停止”），使下一轮“继续”可以读取原问题和已输出内容。模型或数据库异常仍不保存失败回合。重启或多实例请求可从数据库恢复历史；工具调用中间消息不注入下次模型上下文。
 
 - `GET /api/conversations`：最近 50 条对话
-- `GET /api/conversations/{id}`：对话及消息；每条助手消息包含 `thinking`（模型返回的推理文本，可能为 `null`）、`references` 来源数组和 `recommendations` 推荐问题数组。附带文件的用户消息另有 `fileId` 和 `fileName`。
+- `GET /api/conversations/{id}`：对话及消息；每条助手消息包含 `thinking`（模型返回的推理文本，可能为 `null`）、`references` 来源数组和 `recommendations` 推荐问题数组；`timeline` 为技能回合的阶段记录数组，其他回合为空数组。附带文件的用户消息另有 `fileId` 和 `fileName`。
 - `DELETE /api/conversations/{id}`：删除对话
 - `POST /api/files`：`multipart/form-data`，表单字段名为 `file`；返回 `{"fileId":"32位小写十六进制","name":"文档.pdf","contentType":"application/pdf","size":12345}`（响应字段不因索引而改变）。支持 PDF、DOCX、UTF-8 TXT/MD、PNG/JPEG/WebP/GIF，最大 10 MiB；没有可提取文字的文档返回 400。上传的原文件存入 MinIO，文件元数据存入 MySQL；不超过 12000 字符的文档文字直接存于 MySQL，超过 12000 字符的文档按片段索引至 pgvector（`vector_file_info`），MySQL `uploaded_files.extracted_text` 留空。
 - `POST /api/chat`：`{"conversationId":null,"message":"你好"}`，使用联网搜索 Agent，同时提供宿主机绝对路径文件工具和 `bash`；新对话传 `null`，继续对话传已有 ID。

@@ -24,6 +24,7 @@ public final class PlanExecutePrompts {
 
     public static final String PLAN = """
             你是【DeepResearch 执行计划规划专家】。
+            所有研究规划与对外展示的检索任务说明均使用简体中文；工具名称、JSON 字段名和搜索关键词保持原样。
 
             你面对的是一个【研究型任务】，而不是一次性问答。
             你的职责是在执行任何工具调用之前，
@@ -107,6 +108,7 @@ public final class PlanExecutePrompts {
 
     public static final String EXECUTE = """
             你是【DeepResearch 工具执行与结果整理专家】。
+            整理结果与思考过程均使用简体中文；来源标题、引文、URL 和工具标识保持原样。
 
             你正在执行研究计划中的具体工具任务，
             你的输出将作为后续研究的【事实依据】。
@@ -118,7 +120,7 @@ public final class PlanExecutePrompts {
             - 允许对冗长输出进行压缩和整理，但不得改变原始含义
             - 仅提取和表述工具返回的关键事实、数据和原文结论
             - 如存在不确定或冲突信息，应如实保留
-            - 【Current Task】是你检索的唯一任务来源，不要偏离主题
+            - 【当前检索任务】是你检索的唯一任务来源，不要偏离主题
 
             明确禁止：
             - 不进行分析、推理或价值判断
@@ -134,6 +136,7 @@ public final class PlanExecutePrompts {
 
     public static final String CRITIQUE = """
             你是【DeepResearch 研究评审专家】。
+            评审反馈与思考过程均使用简体中文；JSON 字段名保持不变。
 
              你的任务是判断：
              当前研究结果是否【已经足以支持一份对外输出的研究报告】。
@@ -163,6 +166,7 @@ public final class PlanExecutePrompts {
 
     public static final String COMPRESS = """
              你是【上下文内容压缩器】。
+             工作记录和思考过程使用简体中文；用户原始问题、来源、引文、工具名和必要的字段标识保持原样。
 
              你的输出将直接作为 Agent 的下一轮上下文输入，
              用于继续规划、判断和工具调用。
@@ -189,8 +193,8 @@ public final class PlanExecutePrompts {
              - 不得仅保留总结而丢失工具来源
              - 不得合并多个工具结果为模糊描述
 
-             ### 4. 最近一次 Critique / Reflection（如存在）
-             - 是否通过（Passed: true / false）
+             ### 4. 最近一次评审（如存在）
+             - 是否通过（true / false）
              - 如果未通过，明确失败原因和改进要求
 
              ### 5. 当前未解决的问题
@@ -208,34 +212,35 @@ public final class PlanExecutePrompts {
              - 优先压缩或删除：
                 1) 较早且对当前决策影响较小的已完成任务
                 2) 工具输出中的描述性或重复性文本，仅保留关键事实
-                3) Critique / Reflection 中的细节描述（但 Passed 字段必须保留）
+                3) 最近一次评审中的细节描述（但是否通过的结果必须保留）
              - 禁止删除或改写用户最终目标
 
              ## 输出格式（严格遵守）
-             【User Goal】
+             【用户目标】
              <用户原始问题或最终目标>
 
-             【Completed Work】
-             - Task: <已执行的任务>
-               Conclusion: <结论或结果>
+             【已完成工作】
+             - 任务: <已执行的任务>
+               结论: <结论或结果>
              - ...
 
-             【Key Tool Results】
-             - Tool: <tool_name>
-               Input: <关键输入参数>
-               Result: <关键事实、数据或结论>
+             【关键工具结果】
+             - 工具: <tool_name>
+               输入: <关键输入参数>
+               结果: <关键事实、数据或结论>
              - ...
 
-             【Last Critique】
-             - Passed: true / false
-             - Feedback: <失败原因或通过结论；如不存在填写 NONE>
+             【最近一次评审】
+             - 是否通过: true / false
+             - 反馈: <失败原因或通过结论；如不存在填写“无”>
 
-             【Open Issues】
+             【未解决问题】
              - <尚未解决的问题或缺失信息>
             """;
 
     public static final String SUMMARIZE = """
             你是【DeepResearch 结果总结专家】。
+            内部思考过程使用简体中文；最终报告遵循用户要求的语言，引用与 URL 保持原样。
 
             你的任务：
             基于用户的问题、研究主题和工具检索结果，生成最终的深度研究分析报告。
@@ -269,6 +274,7 @@ public final class PlanExecutePrompts {
      */
     public static final String REQUIREMENT_CLARIFICATION = """
             你是【Deep Research 需求分析专家】，只做需求清晰度判断，不直接解答问题。
+            澄清说明和思考过程使用简体中文；用户原始问题中的专有名词保持原样。
 
             ## 任务
             判断用户问题的信息是否足够开展研究。
@@ -309,6 +315,7 @@ public final class PlanExecutePrompts {
      */
     public static final String RESEARCH_TOPIC_GENERATION = """
             你是【Deep Research 分析点规划专家】。
+            研究分析点和思考过程使用简体中文；专有名词与搜索关键词保持原样。
 
             ## 任务目标
             基于用户的问题，列出需要研究的具体分析点/研究维度，为后续深度研究提供明确方向。

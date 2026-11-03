@@ -109,9 +109,12 @@ class ConversationServiceTest {
         when(messages.selectList(any())).thenReturn(List.of(question, answer, olderAnswer));
         when(details.findReferences("session")).thenReturn(List.of(
                 new ChatTurnDetailMapper.ReferenceRow(2L, "先分析问题，再核对资料",
+                        "{\"timeline\":[{\"type\":\"thinking\",\"content\":\"分析\"},"
+                                + "{\"type\":\"tool\",\"toolCallId\":\"call-1\",\"toolName\":\"read_skill\","
+                                + "\"status\":\"error\"},{\"type\":\"error\",\"message\":\"已停止生成\"}]}",
                         "[{\"url\":\"https://docs.tavily.com\",\"title\":\"Tavily 文档\",\"content\":\"摘要\"}]",
                         "[\"继续了解 Tavily？\",\"如何配置搜索？\",\"还有哪些案例？\"]"),
-                new ChatTurnDetailMapper.ReferenceRow(3L, null, "[\"https://example.org/legacy\"]", null)));
+                new ChatTurnDetailMapper.ReferenceRow(3L, null, "[]", "[\"https://example.org/legacy\"]", null)));
 
         List<ConversationService.MessageView> history =
                 new ConversationService(conversations, messages, details, new ObjectMapper())
@@ -127,6 +130,12 @@ class ConversationServiceTest {
                 history.get(1).references());
         assertEquals(List.of("继续了解 Tavily？", "如何配置搜索？", "还有哪些案例？"),
                 history.get(1).recommendations());
+        assertEquals(List.of(java.util.Map.of("type", "thinking", "content", "分析"),
+                        java.util.Map.of("type", "tool", "toolCallId", "call-1", "toolName", "read_skill",
+                                "status", "error"),
+                        java.util.Map.of("type", "error", "message", "已停止生成")), history.get(1).timeline());
+        assertEquals(List.of(), history.get(0).timeline());
+        assertEquals(List.of(), history.get(2).timeline());
         assertEquals(List.of(new SearchResult("https://example.org/legacy", "https://example.org/legacy", "")),
                 history.get(2).references());
         assertEquals(List.of(), history.get(2).recommendations());

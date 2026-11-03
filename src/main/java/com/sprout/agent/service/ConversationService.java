@@ -155,11 +155,23 @@ public class ConversationService {
                             detail == null ? List.of() : readReferences(detail.referencesJson()),
                             detail == null ? List.of() : readRecommendations(detail.recommendationsJson()),
                             detail == null ? null : detail.thinking(),
+                            detail == null ? List.of() : readTimeline(detail.toolsJson()),
                             message.getFileId(), message.getFileName());
                 })
                 .toList();
         return new ConversationDetail(conversation.getId(), conversation.getTitle(),
                 Boolean.TRUE.equals(conversation.getArchived()), messages);
+    }
+
+    private List<Map<String, String>> readTimeline(String json) {
+        if (json == null || json.isBlank() || json.startsWith("[")) return List.of();
+        try {
+            JsonNode timeline = objectMapper.readTree(json).path("timeline");
+            return timeline.isArray() ? objectMapper.convertValue(timeline,
+                    new com.fasterxml.jackson.core.type.TypeReference<List<Map<String, String>>>() {}) : List.of();
+        } catch (JsonProcessingException ex) {
+            throw new IllegalStateException("Invalid stored conversation timeline", ex);
+        }
     }
 
     private List<SearchResult> readReferences(String json) {
@@ -226,7 +238,7 @@ public class ConversationService {
     }
 
     public record MessageView(String role, String text, List<SearchResult> references, List<String> recommendations,
-            String thinking, String fileId, String fileName) {
+            String thinking, List<Map<String, String>> timeline, String fileId, String fileName) {
     }
 
     public record ConversationDetail(String id, String title, boolean archived, List<MessageView> messages) {

@@ -51,15 +51,20 @@ public final class BaseAgentPrompts {
             """;
 
     /**
+     * 思考语言与最终回答语言分别约束，避免用户指定回答语言时改变思考语言。
+     */
+    public static final String LANGUAGE_RULE = "思考和推理过程（包括模型提供的思考内容）始终使用简体中文，即使用户要求其他语言回答；最终回答使用简体中文（用户明确要求其他语言时除外）";
+
+    /**
      * 通用输出规范
      */
     public static final String OUTPUT_SPECIFICATIONS = """
             ## 输出规范
             1. 根据问题选择适当结构，简洁清晰地回答
-            2. 如果模型提供思考内容，思考内容也使用简体中文；最终回答使用简体中文（用户明确要求其他语言时除外）
+            2. %s
             3. 有来源时说明依据；不得虚构链接、标题、引文或数据
             4. 不强制使用 emoji，也不为了凑篇幅重复内容
-            """;
+            """.formatted(LANGUAGE_RULE);
 
     /**
      * 通用强制要求

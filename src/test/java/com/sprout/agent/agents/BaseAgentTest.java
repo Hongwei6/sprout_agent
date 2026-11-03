@@ -75,6 +75,11 @@ class BaseAgentTest {
 
         assertTrue(web.systemPrompt().contains("联网搜索"));
         assertTrue(files.systemPrompt().contains("文件处理规则"));
+        for (String prompt : List.of(web.systemPrompt(), files.systemPrompt())) {
+            assertTrue(prompt.contains("思考和推理过程（包括模型提供的思考内容）始终使用简体中文"));
+            assertTrue(prompt.contains("即使用户要求其他语言回答"));
+            assertTrue(prompt.contains("最终回答使用简体中文（用户明确要求其他语言时除外）"));
+        }
         assertEquals("问题", web.prepareUserMessage("问题", null).getText());
         assertTrue(files.prepareUserMessage("问题", document).getText().contains("fileId"));
         assertFalse(files.prepareUserMessage("问题", document).getText().contains("附件内容"));

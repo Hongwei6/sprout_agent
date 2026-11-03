@@ -12,6 +12,7 @@ import static org.mockito.Mockito.when;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.sprout.agent.agents.BaseAgent.ChatEvent;
+import com.sprout.agent.prompts.PlanExecutePrompts;
 import com.sprout.agent.service.AgentTaskManager;
 import com.sprout.agent.service.ConversationService;
 import java.time.Duration;
@@ -38,6 +39,17 @@ import reactor.core.publisher.Flux;
 class DeepResearchAgentTest {
     private static final String ID = "a".repeat(32);
     private static final String QUESTION = "研究人工智能行业";
+
+    @Test
+    void researchPromptsDirectChineseProgressAndPreserveToolIdentifiers() {
+        assertTrue(PlanExecutePrompts.REQUIREMENT_CLARIFICATION.contains("澄清说明和思考过程使用简体中文"));
+        assertTrue(PlanExecutePrompts.RESEARCH_TOPIC_GENERATION.contains("研究分析点和思考过程使用简体中文"));
+        assertTrue(PlanExecutePrompts.PLAN.contains("检索任务说明均使用简体中文"));
+        assertTrue(PlanExecutePrompts.PLAN.contains("\"instruction\""));
+        assertTrue(PlanExecutePrompts.CRITIQUE.contains("评审反馈与思考过程均使用简体中文"));
+        assertTrue(PlanExecutePrompts.COMPRESS.contains("【已完成工作】"));
+        assertTrue(PlanExecutePrompts.SUMMARIZE.contains("最终报告遵循用户要求的语言"));
+    }
 
     @Test
     void rejectsMalformedAndDuplicatePlansAndParsesActualMcpReferences() throws Exception {
@@ -95,6 +107,8 @@ class DeepResearchAgentTest {
         assertTrue(progress.stream().anyMatch(text -> text.contains("正在执行第 1 组检索")));
         assertTrue(progress.stream().anyMatch(text -> text.contains("第 1 组检索完成")));
         assertTrue(progress.stream().anyMatch(text -> text.contains("正在执行第 2 组检索")));
+        assertTrue(progress.stream().anyMatch(text -> text.contains("行业背景")));
+        assertTrue(progress.stream().anyMatch(text -> text.contains("证据仍有不足：缺少新证据")));
         assertTrue(progress.stream().anyMatch(text -> text.contains("任务 later 检索完成")));
         assertFalse(progress.stream().anyMatch(text -> text.contains("已核实的事实")));
         assertTrue(events.stream().anyMatch(event -> event.name().equals("reference")
@@ -264,7 +278,7 @@ class DeepResearchAgentTest {
                         : "{\"passed\":true,\"feedback\":\"\"}";
                 if (system.contains("工具执行与结果整理专家")) {
                     String task = messages.get().get(1).getText();
-                    task = task.substring(task.lastIndexOf("【Current Task】\n") + "【Current Task】\n".length());
+                    task = task.substring(task.lastIndexOf("【当前检索任务】\n") + "【当前检索任务】\n".length());
                     return "核实证据 https://example.org/" +
                             (task.contains("查证先行") ? "first" : task.contains("查证并行") ? "parallel"
                                     : task.contains("查证后续") ? "later" : "replan");
@@ -273,7 +287,7 @@ class DeepResearchAgentTest {
             });
             when(call.chatResponse()).thenAnswer(inv -> {
                 String context = messages.get().getLast().getText();
-                String query = context.substring(context.indexOf("【Current Task】\n") + "【Current Task】\n".length());
+                String query = context.substring(context.indexOf("【当前检索任务】\n") + "【当前检索任务】\n".length());
                 if (query.contains("查证后续")) dependentContext.set(context);
                 String args = new ObjectMapper().writeValueAsString(java.util.Map.of("query", query));
                 return new ChatResponse(List.of(new Generation(AssistantMessage.builder()

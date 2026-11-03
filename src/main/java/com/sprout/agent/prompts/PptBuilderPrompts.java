@@ -11,6 +11,7 @@ public class PptBuilderPrompts {
     public static final String INTENT_RECOGNITION_PROMPT = """
             # 角色
             你是萌芽的PPT操作意图识别助手，根据用户输入判断意图。
+            思考过程和识别原因使用简体中文；意图枚举值与 JSON 字段名保持原样。
 
             # 任务
             分析用户的输入，判断其意图：
@@ -36,6 +37,7 @@ public class PptBuilderPrompts {
     public static final String REQUIREMENT_PROMPT = """
             ## 角色
             你是萌芽的 PPT 需求澄清助手。根据用户本轮输入和已保存的需求，整理生成所需的信息。
+            思考过程和用户可见的澄清说明均使用简体中文；专有名词与固定状态标记保持原样。
 
             ## 任务
             确认主题、页数、风格和受众。未指定页数、风格或受众时给出明确且合理的建议，不必逐项追问；
@@ -56,6 +58,8 @@ public class PptBuilderPrompts {
         return """
                 ## 角色
                 你是专业的PPT内容大纲生成专家。你根据PPT的生成需求、选定模板的结构以及收集的相关信息，生成详细的PPT内容大纲。
+                思考过程和大纲说明使用简体中文；用户指定的语言、专有名词、模板字段和页面类型保持原样。
+                页码行必须保留固定格式 "--- Page X ---"，供后续页面数量校验使用。
 
                 ## 任务
                 请根据需求、模板结构和搜索信息生成PPT内容大纲。模板结构定义了可用的页面类型和字段，你需要根据这些来规划大纲。充分利用搜索到的信息来丰富大纲内容。
@@ -117,6 +121,7 @@ public class PptBuilderPrompts {
         String searchPrompt = """
                 ## 角色
                 你是专业的信息收集助手。
+                思考过程及资料整理使用简体中文；来源标题、引文、URL、工具名和专有名词保持原样。
 
                 ## 任务
                 必须先使用提供的 Tavily 搜索工具检索主题，再依据工具实际结果整理资料；不可编造来源。
@@ -143,6 +148,7 @@ public class PptBuilderPrompts {
         return """
                 ## 角色
                 你是PPT模板选择专家。
+                思考过程和选择原因使用简体中文；模板编码与 JSON 字段名保持原样。
 
                 ## 任务
                 根据PPT需求，从可用模板中选择最合适的一个。
@@ -177,6 +183,7 @@ public class PptBuilderPrompts {
         return """
                 ## 角色
                 你是专业的PPT Schema生成专家。
+                思考过程和页面描述使用简体中文；模板字段、JSON 键名与用户指定的内容语言保持原样。
 
                 ## 任务
                 根据模板Schema的定义和大纲，生成完整的PPT Schema JSON。
@@ -319,6 +326,7 @@ public class PptBuilderPrompts {
         return """
                 ## 角色
                 你是专业的PPT Schema修改专家。
+                思考过程和页面描述使用简体中文；模板字段、JSON 键名与用户指定的内容语言保持原样。
 
                 ## 任务
                 根据用户的修改需求，修改已有的PPT Schema。
@@ -426,6 +434,7 @@ public class PptBuilderPrompts {
         return """
                 ## 角色
                 你是萌芽的PPT生成助手。
+                思考过程使用简体中文；面向用户的总结遵循用户要求的语言，文件链接保持原样。
 
                 ## 任务
                 根据PPT生成需求和生成的文件，为用户提供简洁的PPT总结说明。
@@ -461,6 +470,7 @@ public class PptBuilderPrompts {
         return """
                 ## 角色
                 你是萌芽的PPT修改助手。
+                思考过程使用简体中文；面向用户的总结遵循用户要求的语言，文件链接保持原样。
 
                 ## 任务
                 根据用户的修改需求和修改后的文件，为用户提供简洁的PPT修改完成说明。
@@ -496,6 +506,7 @@ public class PptBuilderPrompts {
         return """
                 ## 角色
                 你是萌芽的PPT生成助手。
+                思考过程使用简体中文；面向用户的失败说明遵循用户要求的语言，技术标识保持原样。
 
                 ## 任务
                 根据生成过程提供的错误信息，简洁地说明失败原因，不泄露内部推理过程。
