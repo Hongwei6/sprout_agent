@@ -52,6 +52,7 @@ public abstract class BaseAgent {
     private final String model;
     private final int maxRounds;
     private final int maxMessages;
+    private final com.sprout.agent.context.ContextCompactor contextCompactor;
     private final boolean enableRecommendations;
 
     protected BaseAgent(
@@ -66,6 +67,23 @@ public abstract class BaseAgent {
             int maxRounds,
             int maxMessages,
             boolean enableRecommendations) {
+        this(chatClientBuilder, conversationService, taskManager, fileService, objectMapper,
+                toolProvider, apiKey, model, maxRounds, maxMessages, enableRecommendations, null);
+    }
+
+    protected BaseAgent(
+            ObjectProvider<ChatClient.Builder> chatClientBuilder,
+            ConversationService conversationService,
+            AgentTaskManager taskManager,
+            UploadedFileService fileService,
+            ObjectMapper objectMapper,
+            SyncMcpToolCallbackProvider toolProvider,
+            String apiKey,
+            String model,
+            int maxRounds,
+            int maxMessages,
+            boolean enableRecommendations,
+            com.sprout.agent.context.ContextPolicy contextPolicy) {
         this.chatClientBuilder = chatClientBuilder;
         this.conversationService = conversationService;
         this.taskManager = taskManager;
@@ -80,6 +98,8 @@ public abstract class BaseAgent {
         }
         this.maxMessages = maxMessages;
         this.enableRecommendations = enableRecommendations;
+        this.contextCompactor = contextPolicy == null ? null
+                : new com.sprout.agent.context.ContextCompactor(contextPolicy);
     }
 
     public boolean isAvailable() {
@@ -166,6 +186,9 @@ public abstract class BaseAgent {
 
     private Flux<ChatEvent> scheduleRound(
             ChatClient client, List<Message> messages, String conversationId, String question, TurnState turn, int round) {
+        if (contextCompactor != null) {
+            contextCompactor.compact(messages, question, client);
+        }
         RoundState state = new RoundState();
         OpenAiChatOptions.Builder options = OpenAiChatOptions.builder().internalToolExecutionEnabled(false);
         Flux<ChatResponse> chunks = Flux.defer(() -> client.prompt().messages(messages)

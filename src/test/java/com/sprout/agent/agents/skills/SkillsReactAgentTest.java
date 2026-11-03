@@ -276,7 +276,7 @@ class SkillsReactAgentTest {
             when(search.getToolCallbacks()).thenReturn(callbacks);
             agent = new SkillsReactAgent(builders, conversations, tasks, mock(UploadedFileService.class), mapper,
                     search, new SkillRegistry(directory), mock(SkillInstaller.class), "api-key", "model",
-                    maxRounds, 20, false);
+                    maxRounds, 20, false, 60000, 4, 200);
         }
 
         List<ChatEvent> stream() {

@@ -150,7 +150,7 @@ class SkillInstallerTest {
         SkillsReactAgent agent = new SkillsReactAgent(mock(ObjectProvider.class),
                 mock(ConversationService.class), mock(AgentTaskManager.class),
                 mock(UploadedFileService.class), new ObjectMapper(), provider, registry,
-                new SkillInstaller(registry), "api-key", "model", 5, 20, true);
+                new SkillInstaller(registry), "api-key", "model", 5, 20, true, 60000, 4, 200);
         assertEquals("read_skill", agent.toolCallbacks(null)[0].getToolDefinition().name());
         assertEquals("install_skill", agent.toolCallbacks(null)[1].getToolDefinition().name());
         assertTrue(java.util.Arrays.stream(agent.toolCallbacks(null))

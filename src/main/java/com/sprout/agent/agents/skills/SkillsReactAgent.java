@@ -35,9 +35,13 @@ public class SkillsReactAgent extends BaseAgent {
             @Value("${spring.ai.openai.chat.options.model:}") String model,
             @Value("${sprout.agent.skills.max-rounds:24}") int maxRounds,
             @Value("${sprout.agent.max-messages:20}") int maxMessages,
-            @Value("${sprout.agent.enable-recommendations:true}") boolean recommendations) {
+            @Value("${sprout.agent.enable-recommendations:true}") boolean recommendations,
+            @Value("${sprout.agent.skills.context.token-threshold:60000}") int tokenThreshold,
+            @Value("${sprout.agent.skills.context.keep-recent-tools:4}") int keepRecentTools,
+            @Value("${sprout.agent.skills.context.max-tool-length:200}") int maxToolLength) {
         super(chatClientBuilder, conversations, tasks, files, mapper, search,
-                apiKey, model, maxRounds, maxMessages, recommendations);
+                apiKey, model, maxRounds, maxMessages, recommendations,
+                new com.sprout.agent.context.ContextPolicy(tokenThreshold, keepRecentTools, maxToolLength, java.util.Set.of()));
         this.registry = registry;
         ToolCallback[] searchTools = super.toolCallbacks(null);
         ToolCallback[] scriptTools = ToolCallbacks.from(new RunSkillScriptTool(registry));
