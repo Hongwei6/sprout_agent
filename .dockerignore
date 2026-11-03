@@ -1,0 +1,10 @@
+.git
+.env
+.venv
+agent-workspace
+skills
+dev
+.openidea
+*.md
+compose.yaml
+run.sh

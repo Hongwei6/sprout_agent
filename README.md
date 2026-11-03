@@ -56,6 +56,34 @@ open http://localhost:8080
 
 服务通过 Nacos Discovery 注册为 `sprout-agent`。Nginx 转发 SSE 需关闭 `proxy_buffering` 并调大 `proxy_read_timeout`。
 
+### Docker 部署（T480s）
+
+```sh
+# 1. 基础镜像经镜像代理拉取并打同名 tag（Docker Hub 直连不可达）
+docker pull docker.m.daocloud.io/library/eclipse-temurin:21-jre-jammy
+docker tag docker.m.daocloud.io/library/eclipse-temurin:21-jre-jammy eclipse-temurin:21-jre-jammy
+docker pull docker.m.daocloud.io/library/docker:29-cli
+docker tag docker.m.daocloud.io/library/docker:29-cli docker:29-cli
+docker pull docker.m.daocloud.io/library/python:3.12-alpine
+docker tag docker.m.daocloud.io/library/python:3.12-alpine python:3.12-alpine
+
+# 2. 本地打 jar，远程构建镜像（docker context create t480s --docker "host=ssh://hongwei@10.244.0.111"）
+mvn -q package -DskipTests && docker --context t480s build -t sprout-agent:latest .
+
+# 3. 服务器 /opt/sprout/ 放 .env（600）并初始化 skills/；8080/8081 被占用，用 8082
+docker --context t480s run -d --name sprout-agent --network host --restart unless-stopped \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v /opt/sprout/skills:/opt/sprout/skills \
+  -v /opt/sprout/.env:/app/.env:ro \
+  -e SERVER_PORT=8082 \
+  -e SPROUT_AGENT_SKILLS_DIRECTORY=/opt/sprout/skills \
+  -e SPROUT_PPT_PYTHON=python3 \
+  -e SPROUT_PPT_IMAGE_PUBLIC_BASE_URL=http://10.244.0.111:8082 \
+  sprout-agent:latest
+```
+
+镜像含 docker CLI 与 python-pptx：技能沙箱通过挂载的 `/var/run/docker.sock` 起兄弟容器（`run_skill_script` 的 bind 源路径依赖宿主机与容器同路径 `/opt/sprout/skills`）；PPT 渲染直接用容器内 `python3`。升级：重新 build 后 `docker rm -f sprout-agent` 再 run（命令同上）。
+
 ## 代码结构
 
 ```
