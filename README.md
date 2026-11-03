@@ -1,6 +1,6 @@
 # 萌芽（sprout_agent）
 
-基于 Spring Boot 的豆包风格 AI 助手，提供联网聊天、文件问答、PPT 生成、深度研究和技能助手五种能力。对话使用 DeepSeek，联网搜索使用 Tavily MCP。
+基于 Spring Boot 的多模态 AI 助手，提供联网聊天、文件问答、PPT 生成、深度研究和技能助手五种能力。对话使用 DeepSeek，联网搜索使用 Tavily MCP。
 
 ## 技术栈
 
@@ -36,7 +36,7 @@
 | `SPROUT_PPT_IMAGE_PUBLIC_BASE_URL` | 渲染器可访问的服务地址 |
 | `SPROUT_VISION_BASE_URL` / `SPROUT_VISION_MODEL` | 视觉模型（可选 `SPROUT_VISION_API_KEY`） |
 
-**Nacos**：地址 `10.244.0.111:8848`，命名空间 `sprout_agent`，含 Redis（`10.244.0.111:6379` db1）、Tavily Key 等。
+**Nacos**：地址、命名空间 `sprout_agent` 及 Data ID 见部署环境；共享配置（Redis 连接、Tavily Key 等）存放于 Nacos，仓库不保存。
 
 **常用配置键**（`application.yml`，均可被环境变量覆盖）：`sprout.agent.max-rounds`（聊天工具轮数）、`sprout.agent.skills.max-rounds`（技能 24 轮 + 6 轮失败恢复）、`sprout.agent.skills.context.{token-threshold,keep-recent-tools,max-tool-length}`（上下文压缩）、`sprout.research.max-rounds`、`sprout.agent.enable-recommendations`。
 
@@ -55,19 +55,6 @@ open http://localhost:8080
 ```
 
 服务通过 Nacos Discovery 注册为 `sprout-agent`。Nginx 转发 SSE 需关闭 `proxy_buffering` 并调大 `proxy_read_timeout`。
-
-## 主要接口
-
-| 接口 | 说明 |
-|---|---|
-| `POST /api/chat` / `/api/file-chat` / `/api/ppt` / `/api/research` / `/api/skills/chat` | 均返回 SSE 流；请求体 `{"conversationId":null,"message":"…"}`
-| `POST /api/files` | 上传文件，返回 `fileId`
-| `GET /api/skills` | 已安装技能列表 |
-| `GET /api/conversations[?archived=&query=]` | 最近 50 条对话 |
-| `GET/DELETE /api/conversations/{id}` | 对话详情（含推理/来源/时间线）/ 删除 |
-| `PATCH /api/conversations/{id}/{archive,restore,title}` | 归档、恢复、重命名 |
-| `PATCH /api/chat/{conversationId}/stop` | 停止生成 |
-| `GET /api/ppt/conversations/{id}` / `.../download` | PPT 状态 / 下载 |
 
 ## 代码结构
 
